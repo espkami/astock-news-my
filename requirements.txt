@@ -1,0 +1,41 @@
+# Core
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+pydantic-settings==2.2.1
+
+# Database
+sqlalchemy==2.0.30
+asyncpg==0.29.0
+alembic==1.13.1
+redis==5.0.4
+
+# HTTP / scraping
+httpx==0.27.0
+aiohttp==3.9.5
+beautifulsoup4==4.12.3
+lxml==5.2.1
+feedparser==6.0.11
+
+# NLP / ML
+anthropic==0.28.0
+sentence-transformers==3.0.1
+faiss-cpu==1.8.0
+torch==2.3.0
+transformers==4.41.1
+jieba==0.42.1
+numpy==1.26.4
+
+# Finance data
+tushare==1.4.17
+akshare==1.12.78
+
+# Task scheduling
+apscheduler==3.10.4
+celery==5.4.0
+
+# Utilities
+python-dotenv==1.0.1
+loguru==0.7.2
+tenacity==8.3.0
+orjson==3.10.3

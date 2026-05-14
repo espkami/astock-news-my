@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股新闻-龙头股匹配系统</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.10.0/dist/tabler-icons.min.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #ffffff; --bg-sec: #f5f5f4; --bg-ter: #eeece8;
+    --bg-info: #e6f1fb; --bg-success: #eaf3de; --bg-danger: #fcebeb; --bg-warn: #faeeda;
+    --text: #1a1a18; --text-sec: #5f5e5a; --text-ter: #888780;
+    --text-info: #185fa5; --text-success: #3b6d11; --text-danger: #a32d2d; --text-warn: #854f0b;
+    --border: rgba(0,0,0,0.12); --border-sec: rgba(0,0,0,0.22);
+    --border-info: rgba(24,95,165,0.4);
+    --radius-md: 8px; --radius-lg: 12px;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1e1c; --bg-sec: #2a2a27; --bg-ter: #141413;
+      --bg-info: #0c2a45; --bg-success: #172504; --bg-danger: #2d0d0d; --bg-warn: #2d1a04;
+      --text: #f0ede8; --text-sec: #b4b2a9; --text-ter: #888780;
+      --text-info: #85b7eb; --text-success: #c0dd97; --text-danger: #f09595; --text-warn: #fac775;
+      --border: rgba(255,255,255,0.10); --border-sec: rgba(255,255,255,0.18);
+    }
+  }
+  body { font-family: var(--font); background: var(--bg-ter); color: var(--text); min-height: 100vh; }
+
+  /* NAV */
+  .nav { display:flex; align-items:center; justify-content:space-between; padding:12px 24px;
+         background:var(--bg); border-bottom:0.5px solid var(--border); position:sticky; top:0; z-index:100; }
+  .nav-logo { display:flex; align-items:center; gap:8px; font-size:15px; font-weight:500; }
+  .nav-logo i { font-size:20px; color:var(--text-info); }
+  .nav-tabs { display:flex; gap:4px; }
+  .tab { font-size:13px; padding:6px 16px; border-radius:var(--radius-md); border:none; background:transparent;
+         color:var(--text-sec); cursor:pointer; transition:.15s; }
+  .tab:hover { background:var(--bg-sec); }
+  .tab.active { background:var(--bg-sec); color:var(--text); font-weight:500; }
+  .nav-right { display:flex; align-items:center; gap:8px; }
+  .badge-live { display:flex; align-items:center; gap:5px; font-size:12px; padding:4px 10px;
+                border-radius:20px; background:var(--bg-success); color:var(--text-success); }
+  .dot { width:6px; height:6px; border-radius:50%; background:var(--text-success); animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .btn { display:inline-flex; align-items:center; gap:6px; font-size:13px; padding:7px 14px;
+         border-radius:var(--radius-md); border:0.5px solid var(--border-sec); background:transparent;
+         color:var(--text); cursor:pointer; transition:.15s; font-family:var(--font); }
+  .btn:hover { background:var(--bg-sec); }
+  .btn-primary { background:var(--bg-info); color:var(--text-info); border-color:var(--border-info); }
+  .btn-primary:hover { opacity:.85; }
+
+  /* LAYOUT */
+  .main { max-width:1280px; margin:0 auto; padding:20px 24px; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:20px; }
+  .stat { background:var(--bg-sec); border-radius:var(--radius-md); padding:14px 16px; }
+  .stat-label { font-size:12px; color:var(--text-sec); margin-bottom:6px; }
+  .stat-val { font-size:22px; font-weight:500; }
+  .stat-sub { font-size:11px; color:var(--text-ter); margin-top:3px; }
+  .green { color:var(--text-success); } .red { color:var(--text-danger); } .gray { color:var(--text-ter); }
+  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .card { background:var(--bg); border:0.5px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; }
+  .card-head { display:flex; align-items:center; justify-content:space-between; padding:14px 16px;
+               border-bottom:0.5px solid var(--border); }
+  .card-title { font-size:14px; font-weight:500; display:flex; align-items:center; gap:8px; }
+  .filter-bar { display:flex; gap:6px; }
+  .filter-btn { font-size:12px; padding:4px 12px; border-radius:20px; cursor:pointer;
+                border:0.5px solid var(--border); background:transparent; color:var(--text-sec); transition:.12s; }
+  .filter-btn.on { background:var(--bg-info); border-color:var(--border-info); color:var(--text-info); }
+
+  /* NEWS */
+  .news-item { padding:12px 16px; border-bottom:0.5px solid var(--border); cursor:pointer; transition:.12s; }
+  .news-item:last-child { border-bottom:none; }
+  .news-item:hover { background:var(--bg-sec); }
+  .news-item.selected { background:var(--bg-info); }
+  .news-row1 { display:flex; align-items:flex-start; gap:8px; margin-bottom:6px; }
+  .news-title { font-size:13px; font-weight:500; flex:1; line-height:1.4; }
+  .pill { font-size:11px; padding:2px 8px; border-radius:20px; white-space:nowrap; flex-shrink:0; }
+  .pill-positive { background:var(--bg-success); color:var(--text-success); }
+  .pill-negative { background:var(--bg-danger); color:var(--text-danger); }
+  .pill-neutral { background:var(--bg-sec); color:var(--text-sec); }
+  .pill-info { background:var(--bg-info); color:var(--text-info); }
+  .news-meta { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text-ter); flex-wrap:wrap; }
+  .news-kw { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--bg-sec); color:var(--text-sec); }
+
+  /* MATCH */
+  .match-item { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:0.5px solid var(--border); }
+  .match-item:last-child { border-bottom:none; }
+  .rank { width:22px; height:22px; border-radius:50%; background:var(--bg-sec); font-size:11px; font-weight:500;
+          display:flex; align-items:center; justify-content:center; flex-shrink:0; color:var(--text-sec); }
+  .rank.r1 { background:var(--bg-warn); color:var(--text-warn); }
+  .match-name { font-size:13px; font-weight:500; }
+  .match-code { font-size:11px; color:var(--text-ter); }
+  .match-reason { font-size:12px; color:var(--text-sec); margin-top:2px; }
+  .score-bar { height:4px; border-radius:2px; background:var(--border); overflow:hidden; margin:4px 0; }
+  .score-fill { height:100%; border-radius:2px; background:var(--text-info); }
+  .score-num { font-size:13px; font-weight:500; color:var(--text-info); }
+  .mktcap { font-size:11px; color:var(--text-ter); }
+  .empty-match { padding:40px 16px; text-align:center; color:var(--text-ter); font-size:13px; }
+
+  /* SETTINGS */
+  .page-settings { display:none; max-width:1280px; margin:0 auto; padding:20px 24px; }
+  .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .set-card { background:var(--bg); border:0.5px solid var(--border); border-radius:var(--radius-lg); padding:20px; }
+  .set-title { font-size:14px; font-weight:500; display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+  .set-sub { font-size:12px; color:var(--text-sec); margin-bottom:16px; }
+  .form-row { margin-bottom:14px; }
+  .form-label { display:flex; align-items:center; justify-content:space-between; font-size:12px; color:var(--text-sec); margin-bottom:6px; }
+  .form-label a { font-size:11px; color:var(--text-info); cursor:pointer; text-decoration:none; }
+  input[type=text], input[type=password], select, textarea {
+    width:100%; font-size:13px; padding:8px 10px; border:0.5px solid var(--border-sec);
+    border-radius:var(--radius-md); background:var(--bg); color:var(--text); font-family:var(--font);
+  }
+  input:focus, select:focus, textarea:focus {
+    outline:none; border-color:var(--border-info); box-shadow:0 0 0 2px rgba(24,95,165,.1);
+  }
+  .pw-wrap { position:relative; }
+  .pw-wrap input { padding-right:36px; }
+  .pw-eye { position:absolute; right:10px; top:50%; transform:translateY(-50%);
+            cursor:pointer; color:var(--text-ter); font-size:16px; background:none; border:none; padding:0; }
+  .model-btn-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .model-btn { font-size:12px; padding:5px 12px; border-radius:var(--radius-md); cursor:pointer;
+               border:0.5px solid var(--border-sec); background:transparent; color:var(--text-sec); transition:.12s; }
+  .model-btn.selected { border-color:var(--border-info); background:var(--bg-info); color:var(--text-info); }
+  .slider-row { display:flex; align-items:center; gap:10px; }
+  .slider-row label { font-size:12px; color:var(--text-sec); min-width:90px; }
+  .slider-row input[type=range] { flex:1; }
+  .slider-row span { font-size:12px; font-weight:500; min-width:36px; text-align:right; }
+  .toggle-row { display:flex; align-items:center; justify-content:space-between; padding:9px 0;
+                border-bottom:0.5px solid var(--border); font-size:13px; }
+  .toggle-row:last-of-type { border-bottom:none; }
+  .toggle { position:relative; width:36px; height:20px; flex-shrink:0; }
+  .toggle input { opacity:0; width:0; height:0; position:absolute; }
+  .toggle-slider { position:absolute; inset:0; border-radius:20px; background:var(--border-sec);
+                   cursor:pointer; transition:.2s; }
+  .toggle input:checked + .toggle-slider { background:var(--text-info); }
+  .toggle-slider::before { content:''; position:absolute; width:16px; height:16px; left:2px; top:2px;
+                            border-radius:50%; background:white; transition:.2s; }
+  .toggle input:checked + .toggle-slider::before { transform:translateX(16px); }
+  .save-row { display:flex; justify-content:flex-end; gap:8px; margin-top:16px;
+              padding-top:16px; border-top:0.5px solid var(--border); }
+
+  /* TOAST */
+  .toast { position:fixed; bottom:24px; right:24px; background:var(--bg); border:0.5px solid var(--border-sec);
+           border-radius:var(--radius-lg); padding:12px 16px; font-size:13px;
+           display:none; align-items:center; gap:8px; z-index:9999; }
+  .toast.show { display:flex; }
+  .toast i { color:var(--text-success); font-size:18px; }
+
+  /* API STATUS */
+  .api-test-result { margin-top:10px; font-size:12px; padding:8px 12px; border-radius:var(--radius-md);
+                     display:none; }
+  .api-test-result.ok { background:var(--bg-success); color:var(--text-success); display:block; }
+  .api-test-result.err { background:var(--bg-danger); color:var(--text-danger); display:block; }
+
+  @media (max-width: 768px) {
+    .two-col, .settings-grid, .stats { grid-template-columns:1fr; }
+    .main, .page-settings { padding:12px; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-logo">
+    <i class="ti ti-chart-candle" aria-hidden="true"></i>
+    A股新闻匹配系统
+  </div>
+  <div class="nav-tabs">
+    <button class="tab active" onclick="switchTab('dashboard',this)">仪表盘</button>
+    <button class="tab" onclick="switchTab('settings',this)">模型配置</button>
+  </div>
+  <div class="nav-right">
+    <div class="badge-live"><span class="dot"></span>运行中</div>
+    <button class="btn" onclick="triggerCollect()">
+      <i class="ti ti-refresh" aria-hidden="true"></i>立即采集
+    </button>
+  </div>
+</nav>
+
+<!-- ── DASHBOARD ────────────────────────────────────────── -->
+<div id="page-dashboard">
+  <div class="main">
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">今日新闻</div>
+        <div class="stat-val" id="s-news">—</div>
+        <div class="stat-sub" id="s-news-sub">加载中...</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">匹配成功</div>
+        <div class="stat-val" id="s-match">—</div>
+        <div class="stat-sub" id="s-match-sub"></div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">利好 / 利空</div>
+        <div class="stat-val"><span class="green" id="s-pos">—</span> / <span class="red" id="s-neg">—</span></div>
+        <div class="stat-sub">中性 <span class="gray" id="s-neu">—</span></div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">当前模型</div>
+        <div class="stat-val" id="s-model" style="font-size:15px;margin-top:4px">加载中...</div>
+        <div class="stat-sub" id="s-key-status"></div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-news" aria-hidden="true"></i>最新新闻</div>
+          <div class="filter-bar">
+            <button class="filter-btn on" onclick="filterNews('all',this)">全部</button>
+            <button class="filter-btn" onclick="filterNews('positive',this)">利好</button>
+            <button class="filter-btn" onclick="filterNews('negative',this)">利空</button>
+            <button class="filter-btn" onclick="filterNews('neutral',this)">中性</button>
+          </div>
+        </div>
+        <div id="news-list"><div class="empty-match">加载中...</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-trending-up" aria-hidden="true"></i>匹配龙头股</div>
+          <span style="font-size:12px;color:var(--text-ter)" id="match-label">点击左侧新闻</span>
+        </div>
+        <div id="match-list">
+          <div class="empty-match">
+            <i class="ti ti-arrow-left" style="font-size:24px;display:block;margin-bottom:8px" aria-hidden="true"></i>
+            点击左侧新闻查看匹配的龙头股
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── SETTINGS ─────────────────────────────────────────── -->
+<div id="page-settings" class="page-settings">
+  <div class="settings-grid">
+
+    <!-- 大模型配置 -->
+    <div class="set-card">
+      <div class="set-title"><i class="ti ti-brain" aria-hidden="true" style="font-size:18px"></i>大模型 API 配置</div>
+      <div class="set-sub">配置新闻精分类与匹配理由生成所用的大模型</div>
+
+      <div class="form-row">
+        <div class="form-label">模型提供商</div>
+        <select id="provider-sel" onchange="onProviderChange()">
+          <option value="anthropic">Anthropic (Claude)</option>
+          <option value="openai">OpenAI (GPT)</option>
+          <option value="qwen">阿里云 (Qwen)</option>
+          <option value="zhipu">智谱AI (GLM)</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="custom">自定义 Base URL</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <div class="form-label">
+          模型
+          <a id="model-docs-link" href="https://docs.anthropic.com/en/docs/about-claude/models/overview" target="_blank">查看可用模型 ↗</a>
+        </div>
+        <div class="model-btn-row" id="model-btns"></div>
+        <input type="text" id="model-input" placeholder="或手动输入 model ID（如 claude-sonnet-4-20250514）">
+      </div>
+
+      <div class="form-row">
+        <div class="form-label">
+          API Key
+          <a id="key-docs-link" href="https://console.anthropic.com/keys" target="_blank">获取 Key ↗</a>
+        </div>
+        <div class="pw-wrap">
+          <input type="password" id="api-key-input" placeholder="sk-ant-...">
+          <button class="pw-eye" onclick="toggleVis('api-key-input','eye-icon')" aria-label="显示/隐藏 API Key">
+            <i class="ti ti-eye" id="eye-icon" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="form-row" id="base-url-row" style="display:none">
+        <div class="form-label">Base URL</div>
+        <input type="text" id="base-url-input" placeholder="https://api.example.com/v1">
+      </div>
+
+      <div class="form-row">
+        <div class="form-label">置信度阈值（低于此值升级 LLM 精分类）</div>
+        <div class="slider-row">
+          <label>BERT 阈值</label>
+          <input type="range" min="50" max="99" value="90" step="1" id="conf-slider"
+                 oninput="document.getElementById('conf-val').textContent=this.value+'%'">
+          <span id="conf-val">90%</span>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-label">每篇新闻匹配股票数（top-k）</div>
+        <div class="slider-row">
+          <label>top-k</label>
+          <input type="range" min="1" max="10" value="5" step="1" id="topk-slider"
+                 oninput="document.getElementById('topk-val').textContent=this.value">
+          <span id="topk-val">5</span>
+        </div>
+      </div>
+
+      <div id="api-test-result" class="api-test-result"></div>
+
+      <div class="save-row">
+        <button class="btn" onclick="testApiKey()"><i class="ti ti-plug" aria-hidden="true"></i>测试连接</button>
+        <button class="btn btn-primary" onclick="saveSettings()"><i class="ti ti-check" aria-hidden="true"></i>保存配置</button>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:16px">
+
+      <!-- 采集配置 -->
+      <div class="set-card">
+        <div class="set-title"><i class="ti ti-rss" aria-hidden="true" style="font-size:18px"></i>新闻采集配置</div>
+        <div class="set-sub">选择启用的数据源，调整采集频率</div>
+        <div class="toggle-row"><span>财联社电报</span><label class="toggle"><input type="checkbox" id="src-cls" checked><span class="toggle-slider"></span></label></div>
+        <div class="toggle-row"><span>东方财富快讯</span><label class="toggle"><input type="checkbox" id="src-eastmoney" checked><span class="toggle-slider"></span></label></div>
+        <div class="toggle-row"><span>新浪财经</span><label class="toggle"><input type="checkbox" id="src-sina" checked><span class="toggle-slider"></span></label></div>
+        <div class="toggle-row"><span>RSS 聚合（路透 / 财新 / 第一财经）</span><label class="toggle"><input type="checkbox" id="src-rss"><span class="toggle-slider"></span></label></div>
+        <div class="form-row" style="margin-top:14px;margin-bottom:0">
+          <div class="form-label">采集间隔（秒）</div>
+          <div class="slider-row">
+            <label>interval</label>
+            <input type="range" min="60" max="1800" value="300" step="60" id="int-slider"
+                   oninput="document.getElementById('int-val').textContent=this.value+'s'">
+            <span id="int-val">300s</span>
+          </div>
+        </div>
+        <div class="save-row">
+          <button class="btn btn-primary" onclick="saveCollectSettings()"><i class="ti ti-check" aria-hidden="true"></i>保存</button>
+        </div>
+      </div>
+
+      <!-- Prompt & DB 配置 -->
+      <div class="set-card">
+        <div class="set-title"><i class="ti ti-prompt" aria-hidden="true" style="font-size:18px"></i>Prompt & 数据配置</div>
+        <div class="set-sub">自定义分类 Prompt 模板（{title} {content} 为占位符）</div>
+        <div class="form-row">
+          <div class="form-label">分类 Prompt</div>
+          <textarea id="prompt-input" rows="5" placeholder="分析以下财经新闻，输出结构化分类JSON。&#10;&#10;新闻标题：{title}&#10;新闻内容：{content}&#10;&#10;输出字段：industries / event_type / sentiment / scope / confidence / keywords"></textarea>
+        </div>
+        <div class="form-row" style="margin-bottom:0">
+          <div class="form-label">
+            Tushare Token
+            <a href="https://tushare.pro/register" target="_blank">注册获取 ↗</a>
+          </div>
+          <div class="pw-wrap">
+            <input type="password" id="ts-token" placeholder="用于拉取 A 股实时数据（可选）">
+            <button class="pw-eye" onclick="toggleVis('ts-token','ts-eye')" aria-label="显示/隐藏 Token">
+              <i class="ti ti-eye" id="ts-eye" aria-hidden="true"></i>
+            </button>
+          </div>
+        </div>
+        <div class="save-row">
+          <button class="btn" onclick="resetPrompt()"><i class="ti ti-rotate" aria-hidden="true"></i>恢复默认</button>
+          <button class="btn btn-primary" onclick="saveSettings()"><i class="ti ti-check" aria-hidden="true"></i>保存</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast" role="status" aria-live="polite">
+  <i class="ti ti-circle-check" id="toast-icon" aria-hidden="true"></i>
+  <span id="toast-msg">已保存</span>
+</div>
+
+<script>
+const API_BASE = '';  /* 同域部署时留空，跨域时填 http://localhost:8000 */
+
+/* ── 提供商配置 ── */
+const PROVIDERS = {
+  anthropic: {
+    models: ['claude-sonnet-4-20250514','claude-opus-4-20250514','claude-haiku-4-5-20251001'],
+    labels: ['Sonnet 4.5','Opus 4','Haiku 4.5'],
+    ph: 'sk-ant-api03-...',
+    keyLink: 'https://console.anthropic.com/keys',
+    docsLink: 'https://docs.anthropic.com/en/docs/about-claude/models/overview',
+    displayName: model => { const m={'claude-sonnet-4-20250514':'Claude Sonnet','claude-opus-4-20250514':'Claude Opus','claude-haiku-4-5-20251001':'Claude Haiku'}; return m[model]||model; }
+  },
+  openai: {
+    models: ['gpt-4o','gpt-4o-mini','gpt-4-turbo','o1-preview'],
+    labels: ['GPT-4o','GPT-4o Mini','GPT-4 Turbo','o1 Preview'],
+    ph: 'sk-...',
+    keyLink: 'https://platform.openai.com/api-keys',
+    docsLink: 'https://platform.openai.com/docs/models',
+    displayName: m => m
+  },
+  qwen: {
+    models: ['qwen-max','qwen-plus','qwen-turbo','qwen-long'],
+    labels: ['Qwen Max','Qwen Plus','Qwen Turbo','Qwen Long'],
+    ph: 'sk-...',
+    keyLink: 'https://bailian.console.aliyun.com/',
+    docsLink: 'https://help.aliyun.com/zh/model-studio/getting-started/models',
+    displayName: m => m
+  },
+  zhipu: {
+    models: ['glm-4','glm-4-flash','glm-4-air','glm-3-turbo'],
+    labels: ['GLM-4','GLM-4 Flash','GLM-4 Air','GLM-3 Turbo'],
+    ph: '...',
+    keyLink: 'https://open.bigmodel.cn/usercenter/apikeys',
+    docsLink: 'https://open.bigmodel.cn/dev/api',
+    displayName: m => m
+  },
+  deepseek: {
+    models: ['deepseek-chat','deepseek-coder'],
+    labels: ['DeepSeek Chat','DeepSeek Coder'],
+    ph: 'sk-...',
+    keyLink: 'https://platform.deepseek.com/api_keys',
+    docsLink: 'https://platform.deepseek.com/api-docs',
+    displayName: m => m
+  },
+  custom: {
+    models: [], labels: [], ph: 'your-api-key',
+    keyLink: '#', docsLink: '#',
+    displayName: m => m
+  }
+};
+
+/* ── STATE ── */
+let cfg = JSON.parse(localStorage.getItem('astock_cfg') || '{}');
+cfg = Object.assign({provider:'anthropic', model:'claude-sonnet-4-20250514', apiKey:'', baseUrl:'', confThreshold:90, topK:5, collectInterval:300, prompt:'', tsToken:'', sources:{cls:true,eastmoney:true,sina:true,rss:false}}, cfg);
+
+let newsData = [];
+let matchData = [];
+let selectedNewsId = null;
+let currentFilter = 'all';
+
+/* ── INIT ── */
+function init() {
+  applySettingsUI();
+  loadDashboard();
+}
+
+function applySettingsUI() {
+  document.getElementById('provider-sel').value = cfg.provider;
+  onProviderChange(true);
+  document.getElementById('api-key-input').value = cfg.apiKey;
+  document.getElementById('base-url-input').value = cfg.baseUrl || '';
+  document.getElementById('model-input').value = '';
+  document.getElementById('conf-slider').value = cfg.confThreshold;
+  document.getElementById('conf-val').textContent = cfg.confThreshold + '%';
+  document.getElementById('topk-slider').value = cfg.topK;
+  document.getElementById('topk-val').textContent = cfg.topK;
+  document.getElementById('int-slider').value = cfg.collectInterval;
+  document.getElementById('int-val').textContent = cfg.collectInterval + 's';
+  document.getElementById('ts-token').value = cfg.tsToken || '';
+  document.getElementById('prompt-input').value = cfg.prompt || '';
+  if (cfg.sources) {
+    document.getElementById('src-cls').checked = cfg.sources.cls !== false;
+    document.getElementById('src-eastmoney').checked = cfg.sources.eastmoney !== false;
+    document.getElementById('src-sina').checked = cfg.sources.sina !== false;
+    document.getElementById('src-rss').checked = cfg.sources.rss === true;
+  }
+  /* select correct model button */
+  document.querySelectorAll('#model-btns .model-btn').forEach(btn => {
+    btn.classList.toggle('selected', btn.dataset.model === cfg.model);
+  });
+  updateStatModel();
+}
+
+function updateStatModel() {
+  const p = PROVIDERS[cfg.provider] || PROVIDERS.anthropic;
+  document.getElementById('s-model').textContent = p.displayName(cfg.model) || cfg.model || '未配置';
+  document.getElementById('s-key-status').textContent = cfg.apiKey ? 'API Key 已配置 ✓' : '⚠ 未配置 API Key';
+}
+
+/* ── PROVIDER CHANGE ── */
+function onProviderChange(silent) {
+  const p = document.getElementById('provider-sel').value;
+  const pcfg = PROVIDERS[p] || PROVIDERS.custom;
+  document.getElementById('api-key-input').placeholder = pcfg.ph;
+  document.getElementById('base-url-row').style.display = p === 'custom' ? 'block' : 'none';
+  document.getElementById('key-docs-link').href = pcfg.keyLink;
+  document.getElementById('model-docs-link').href = pcfg.docsLink;
+  const btns = document.getElementById('model-btns');
+  btns.innerHTML = pcfg.models.map((m,i) =>
+    `<button class="model-btn${m===cfg.model?' selected':''}" data-model="${m}" onclick="selectModel(this)">${pcfg.labels[i]}</button>`
+  ).join('');
+  if (!silent) {
+    cfg.provider = p;
+    if (pcfg.models.length) { cfg.model = pcfg.models[0]; }
+    document.querySelectorAll('#model-btns .model-btn')[0]?.classList.add('selected');
+    updateStatModel();
+  }
+}
+
+function selectModel(btn) {
+  document.querySelectorAll('#model-btns .model-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  cfg.model = btn.dataset.model;
+  document.getElementById('model-input').value = '';
+  updateStatModel();
+}
+
+/* ── SETTINGS ── */
+function saveSettings() {
+  cfg.provider = document.getElementById('provider-sel').value;
+  cfg.apiKey = document.getElementById('api-key-input').value.trim();
+  cfg.baseUrl = document.getElementById('base-url-input').value.trim();
+  const manualModel = document.getElementById('model-input').value.trim();
+  if (manualModel) cfg.model = manualModel;
+  cfg.confThreshold = parseInt(document.getElementById('conf-slider').value);
+  cfg.topK = parseInt(document.getElementById('topk-slider').value);
+  cfg.tsToken = document.getElementById('ts-token').value.trim();
+  cfg.prompt = document.getElementById('prompt-input').value.trim();
+  localStorage.setItem('astock_cfg', JSON.stringify(cfg));
+  updateStatModel();
+  /* 同步到后端 */
+  fetch(`${API_BASE}/api/config`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      anthropic_api_key: cfg.provider==='anthropic' ? cfg.apiKey : undefined,
+      openai_api_key: cfg.provider==='openai' ? cfg.apiKey : undefined,
+      model: cfg.model,
+      bert_confidence_threshold: cfg.confThreshold / 100,
+      top_k_stocks: cfg.topK,
+      tushare_token: cfg.tsToken,
+      classify_prompt: cfg.prompt,
+    })
+  }).catch(() => {});
+  showToast('配置已保存');
+}
+
+function saveCollectSettings() {
+  cfg.collectInterval = parseInt(document.getElementById('int-slider').value);
+  cfg.sources = {
+    cls: document.getElementById('src-cls').checked,
+    eastmoney: document.getElementById('src-eastmoney').checked,
+    sina: document.getElementById('src-sina').checked,
+    rss: document.getElementById('src-rss').checked,
+  };
+  localStorage.setItem('astock_cfg', JSON.stringify(cfg));
+  fetch(`${API_BASE}/api/config`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({collect_interval: cfg.collectInterval, ...cfg.sources})
+  }).catch(() => {});
+  showToast('采集配置已保存');
+}
+
+function resetPrompt() {
+  document.getElementById('prompt-input').value = '';
+  showToast('已恢复默认 Prompt');
+}
+
+async function testApiKey() {
+  const key = document.getElementById('api-key-input').value.trim();
+  const res = document.getElementById('api-test-result');
+  res.className = 'api-test-result';
+  res.textContent = '测试中...';
+  res.style.display = 'block';
+  try {
+    const r = await fetch(`${API_BASE}/api/test-key`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({provider: document.getElementById('provider-sel').value, api_key: key})
+    });
+    if (r.ok) {
+      res.className = 'api-test-result ok'; res.textContent = '✓ 连接成功，Key 有效';
+    } else {
+      res.className = 'api-test-result err'; res.textContent = '✗ 连接失败：' + (await r.text()).slice(0,80);
+    }
+  } catch (e) {
+    res.className = 'api-test-result err'; res.textContent = '✗ 无法连接到后端服务';
+  }
+}
+
+/* ── DASHBOARD DATA ── */
+async function loadDashboard() {
+  try {
+    const [newsRes, matchRes, statsRes] = await Promise.all([
+      fetch(`${API_BASE}/api/news?limit=30`),
+      fetch(`${API_BASE}/api/results?limit=50`),
+      fetch(`${API_BASE}/api/stats`),
+    ]);
+    if (newsRes.ok) { const d = await newsRes.json(); newsData = d.news || []; }
+    if (matchRes.ok) { const d = await matchRes.json(); matchData = d.results || []; }
+    if (statsRes.ok) {
+      const d = await statsRes.json();
+      document.getElementById('s-news').textContent = d.news_total ?? newsData.length;
+      document.getElementById('s-match').textContent = d.match_total ?? matchData.length;
+      document.getElementById('s-match-sub').textContent = `共 ${d.stock_total ?? '—'} 只A股`;
+    }
+  } catch (_) {
+    newsData = getMockNews();
+    matchData = getMockMatches();
+  }
+  renderStats();
+  renderNews();
+}
+
+function renderStats() {
+  const pos = newsData.filter(n=>n.sentiment==='positive').length;
+  const neg = newsData.filter(n=>n.sentiment==='negative').length;
+  const neu = newsData.filter(n=>n.sentiment==='neutral').length;
+  document.getElementById('s-pos').textContent = pos;
+  document.getElementById('s-neg').textContent = neg;
+  document.getElementById('s-neu').textContent = neu;
+  if (document.getElementById('s-news').textContent === '—') {
+    document.getElementById('s-news').textContent = newsData.length;
+    document.getElementById('s-match').textContent = matchData.length;
+  }
+}
+
+function renderNews() {
+  const filtered = currentFilter==='all' ? newsData : newsData.filter(n=>n.sentiment===currentFilter);
+  const el = document.getElementById('news-list');
+  if (!filtered.length) { el.innerHTML = '<div class="empty-match">暂无新闻数据</div>'; return; }
+  el.innerHTML = filtered.map(n => {
+    const sentLabel = {positive:'利好',negative:'利空',neutral:'中性'}[n.sentiment]||'—';
+    const kws = (n.keywords||[]).slice(0,2).map(k=>`<span class="news-kw">${k}</span>`).join('');
+    const inds = (n.industries||[]).slice(0,1).map(i=>`<span class="pill pill-info" style="padding:1px 6px">${i}</span>`).join('');
+    const ts = n.published_at ? new Date(n.published_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}) : '';
+    return `<div class="news-item${selectedNewsId===n.id?' selected':''}" onclick="selectNews('${n.id}')">
+      <div class="news-row1">
+        <span class="news-title">${n.title}</span>
+        <span class="pill pill-${n.sentiment}">${sentLabel}</span>
+      </div>
+      <div class="news-meta"><span>${n.source||''}</span><span>${ts}</span>${inds}${kws}</div>
+    </div>`;
+  }).join('');
+}
+
+function selectNews(id) {
+  selectedNewsId = id;
+  renderNews();
+  const match = matchData.find(m => m.news_id === id);
+  const news = newsData.find(n => n.id === id);
+  document.getElementById('match-label').textContent = news ? news.title.slice(0,16)+'…' : '点击左侧新闻';
+  renderMatches(match);
+}
+
+function renderMatches(match) {
+  const el = document.getElementById('match-list');
+  if (!match || !match.matched_stocks || !match.matched_stocks.length) {
+    el.innerHTML = '<div class="empty-match">该新闻暂无匹配结果</div>';
+    return;
+  }
+  el.innerHTML = match.matched_stocks.map((s,i) => {
+    const sc = (s.score*100).toFixed(0);
+    const sem = (s.semantic_score*100).toFixed(0);
+    const ind = (s.industry_score*100).toFixed(0);
+    const pat = (s.patent_score*100).toFixed(0);
+    return `<div class="match-item">
+      <div class="rank${i===0?' r1':''}">${i+1}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:baseline;gap:6px">
+          <span class="match-name">${s.name}</span>
+          <span class="match-code">${s.ts_code}</span>
+        </div>
+        <div class="match-reason">${s.reason}</div>
+        <div style="display:flex;gap:12px;margin-top:5px;font-size:11px;color:var(--text-ter)">
+          <span>语义 ${sem}%</span><span>行业 ${ind}%</span><span>专利 ${pat}%</span>
+        </div>
+      </div>
+      <div style="text-align:right;min-width:72px">
+        <div class="score-num">${sc}分</div>
+        <div class="score-bar"><div class="score-fill" style="width:${sc}%"></div></div>
+        <div class="mktcap">${s.market_cap ? s.market_cap+'亿' : ''}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filterNews(f, btn) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  renderNews();
+}
+
+function switchTab(page, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('page-dashboard').style.display = page==='dashboard' ? '' : 'none';
+  document.getElementById('page-settings').style.display = page==='settings' ? 'block' : 'none';
+}
+
+async function triggerCollect() {
+  showToast('采集中...', true);
+  try {
+    await fetch(`${API_BASE}/api/collect`, {method:'POST'});
+    showToast('采集完成，数据已更新');
+    loadDashboard();
+  } catch (_) { showToast('请求失败，请检查服务状态'); }
+}
+
+function toggleVis(inputId, iconId) {
+  const inp = document.getElementById(inputId);
+  const ico = document.getElementById(iconId);
+  inp.type = inp.type==='password' ? 'text' : 'password';
+  ico.className = inp.type==='password' ? 'ti ti-eye' : 'ti ti-eye-off';
+}
+
+function showToast(msg, loading) {
+  const t = document.getElementById('toast');
+  document.getElementById('toast-msg').textContent = msg;
+  document.getElementById('toast-icon').className = loading ? 'ti ti-loader' : 'ti ti-circle-check';
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), loading ? 1500 : 2800);
+}
+
+/* ── MOCK DATA（后端未启动时使用） ── */
+function getMockNews() {
+  return [
+    {id:'n1',title:'国内首条12英寸晶圆产线投产，年产能50万片',source:'财联社',sentiment:'positive',industries:['semiconductor'],event_type:'tech_breakthrough',keywords:['晶圆','产能'],published_at:new Date().toISOString()},
+    {id:'n2',title:'宁德时代麒麟3.0电池发布，能量密度创新高',source:'东方财富',sentiment:'positive',industries:['new_energy'],event_type:'tech_breakthrough',keywords:['电池','能量密度'],published_at:new Date().toISOString()},
+    {id:'n3',title:'美国扩大芯片出口限制，14nm光刻机禁运',source:'路透社',sentiment:'negative',industries:['semiconductor'],event_type:'geopolitics',keywords:['出口限制','光刻机'],published_at:new Date().toISOString()},
+    {id:'n4',title:'央行宣布降准0.5个百分点，释放流动性1.2万亿',source:'新浪财经',sentiment:'positive',industries:['finance'],event_type:'policy_positive',keywords:['降准','流动性'],published_at:new Date().toISOString()},
+    {id:'n5',title:'锂电头部企业Q1净利润下滑42%，低于预期',source:'财联社',sentiment:'negative',industries:['new_energy'],event_type:'earnings_miss',keywords:['净利润','下滑'],published_at:new Date().toISOString()},
+  ];
+}
+
+function getMockMatches() {
+  return [
+    {news_id:'n1',matched_stocks:[{ts_code:'688981.SH',name:'中芯国际',score:.94,semantic_score:.91,industry_score:.98,patent_score:.89,market_cap:4800,reason:'晶圆代工直接受益'},{ts_code:'688041.SH',name:'海光信息',score:.72,semantic_score:.68,industry_score:.80,patent_score:.65,market_cap:2200,reason:'半导体产业链协同'}]},
+    {news_id:'n2',matched_stocks:[{ts_code:'300750.SZ',name:'宁德时代',score:.98,semantic_score:.97,industry_score:.99,patent_score:.96,market_cap:8500,reason:'直接产品发布利好'},{ts_code:'300014.SZ',name:'亿纬锂能',score:.74,semantic_score:.70,industry_score:.80,patent_score:.68,market_cap:1500,reason:'同赛道竞争受益'}]},
+    {news_id:'n3',matched_stocks:[{ts_code:'688981.SH',name:'中芯国际',score:.88,semantic_score:.85,industry_score:.95,patent_score:.78,market_cap:4800,reason:'国产替代提速'}]},
+    {news_id:'n4',matched_stocks:[{ts_code:'601318.SH',name:'中国平安',score:.82,semantic_score:.79,industry_score:.90,patent_score:.60,market_cap:6500,reason:'金融流动性改善'}]},
+    {news_id:'n5',matched_stocks:[{ts_code:'300750.SZ',name:'宁德时代',score:.69,semantic_score:.65,industry_score:.78,patent_score:.52,market_cap:8500,reason:'行业景气度承压'}]},
+  ];
+}
+
+init();
+</script>
+</body>
+</html>
