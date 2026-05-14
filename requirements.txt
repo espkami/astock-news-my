@@ -28,7 +28,7 @@ numpy==1.26.4
 
 # Finance data
 tushare==1.4.17
-akshare>=1.16.72
+akshare>=1.18.60
 
 # Task scheduling
 apscheduler==3.10.4
