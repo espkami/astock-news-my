@@ -595,12 +595,9 @@ function saveSettings() {
     deepseek: 'deepseek_api_key', custom: 'anthropic_api_key',
   };
   const keyField = keyFieldMap[cfg.provider] || 'anthropic_api_key';
-<<<<<<< HEAD
   /* newsapiKeys 已由 addNewsapiKey/deleteNewsapiKey 实时维护，此处只需保存 */
   localStorage.setItem('astock_cfg', JSON.stringify(cfg));
   const activeKeys = cfg.newsapiKeys.map(k => k.key).filter(Boolean);
-=======
->>>>>>> 9a76ab7043ed56524b2c84838a29bb9d133d685a
   const payload = {
     provider: cfg.provider,
     model: cfg.model,
@@ -608,10 +605,7 @@ function saveSettings() {
     bert_confidence_threshold: cfg.confThreshold / 100,
     top_k_stocks: cfg.topK,
     tushare_token: cfg.tsToken || undefined,
-<<<<<<< HEAD
     newsapi_ai_keys: activeKeys.length ? activeKeys : undefined,
-=======
->>>>>>> 9a76ab7043ed56524b2c84838a29bb9d133d685a
     classify_prompt: cfg.prompt || undefined,
   };
   if (cfg.provider === 'custom' && cfg.baseUrl) payload.custom_base_url = cfg.baseUrl;
