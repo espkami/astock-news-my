@@ -183,9 +183,9 @@
   <div class="main">
     <div class="stats">
       <div class="stat">
-        <div class="stat-label">今日新闻</div>
+        <div class="stat-label">新闻总数</div>
         <div class="stat-val" id="s-news">—</div>
-        <div class="stat-sub" id="s-news-sub">加载中...</div>
+        <div class="stat-sub" id="s-news-sub">采集间隔加载中...</div>
       </div>
       <div class="stat">
         <div class="stat-label">匹配成功</div>
@@ -377,11 +377,11 @@ const API_BASE = '';  /* 同域部署时留空，跨域时填 http://localhost:8
 const PROVIDERS = {
   anthropic: {
     models: ['claude-sonnet-4-20250514','claude-opus-4-20250514','claude-haiku-4-5-20251001'],
-    labels: ['Sonnet 4.5','Opus 4','Haiku 4.5'],
+    labels: ['Sonnet 4','Opus 4','Haiku 4.5'],
     ph: 'sk-ant-api03-...',
     keyLink: 'https://console.anthropic.com/keys',
     docsLink: 'https://docs.anthropic.com/en/docs/about-claude/models/overview',
-    displayName: model => { const m={'claude-sonnet-4-20250514':'Claude Sonnet','claude-opus-4-20250514':'Claude Opus','claude-haiku-4-5-20251001':'Claude Haiku'}; return m[model]||model; }
+    displayName: model => { const m={'claude-sonnet-4-20250514':'Claude Sonnet 4','claude-opus-4-20250514':'Claude Opus 4','claude-haiku-4-5-20251001':'Claude Haiku 4.5'}; return m[model]||model; }
   },
   openai: {
     models: ['gpt-4o','gpt-4o-mini','gpt-4-turbo','o1-preview'],
@@ -466,7 +466,8 @@ function applySettingsUI() {
 
 function updateStatModel() {
   const p = PROVIDERS[cfg.provider] || PROVIDERS.anthropic;
-  document.getElementById('s-model').textContent = p.displayName(cfg.model) || cfg.model || '未配置';
+  const modelName = p.displayName(cfg.model) || cfg.model || '未配置';
+  document.getElementById('s-model').textContent = modelName;
   document.getElementById('s-key-status').textContent = cfg.apiKey ? 'API Key 已配置 ✓' : '⚠ 未配置 API Key';
 }
 
@@ -511,19 +512,27 @@ function saveSettings() {
   cfg.prompt = document.getElementById('prompt-input').value.trim();
   localStorage.setItem('astock_cfg', JSON.stringify(cfg));
   updateStatModel();
-  /* 同步到后端 */
+  /* 构造后端 payload：把当前 provider 对应的 key 字段名传对 */
+  const keyFieldMap = {
+    anthropic: 'anthropic_api_key', openai: 'openai_api_key',
+    qwen: 'qwen_api_key', zhipu: 'zhipu_api_key',
+    deepseek: 'deepseek_api_key', custom: 'anthropic_api_key',
+  };
+  const keyField = keyFieldMap[cfg.provider] || 'anthropic_api_key';
+  const payload = {
+    provider: cfg.provider,
+    model: cfg.model,
+    [keyField]: cfg.apiKey || undefined,
+    bert_confidence_threshold: cfg.confThreshold / 100,
+    top_k_stocks: cfg.topK,
+    tushare_token: cfg.tsToken || undefined,
+    classify_prompt: cfg.prompt || undefined,
+  };
+  if (cfg.provider === 'custom' && cfg.baseUrl) payload.custom_base_url = cfg.baseUrl;
   fetch(`${API_BASE}/api/config`, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({
-      anthropic_api_key: cfg.provider==='anthropic' ? cfg.apiKey : undefined,
-      openai_api_key: cfg.provider==='openai' ? cfg.apiKey : undefined,
-      model: cfg.model,
-      bert_confidence_threshold: cfg.confThreshold / 100,
-      top_k_stocks: cfg.topK,
-      tushare_token: cfg.tsToken,
-      classify_prompt: cfg.prompt,
-    })
+    body: JSON.stringify(payload)
   }).catch(() => {});
   showToast('配置已保存');
 }
@@ -572,12 +581,28 @@ async function testApiKey() {
   }
 }
 
+/* ── 枚举翻译映射（与后端 shared/models.py 保持一致） ── */
+const INDUSTRY_LABELS = {
+  semiconductor: '半导体', new_energy: '新能源', ai_robot: 'AI/机器人',
+  biotech: '生物医药', military: '军工', finance: '金融',
+  consumer: '消费', real_estate: '房地产', automobile: '汽车',
+  new_materials: '新材料', macro: '宏观', other: '其他'
+};
+const EVENT_LABELS = {
+  policy_positive: '政策利好', policy_negative: '政策利空',
+  tech_breakthrough: '技术突破', earnings_beat: '业绩超预期',
+  earnings_miss: '业绩不及预期', merger_acquisition: '并购重组',
+  macro_data: '宏观数据', geopolitics: '地缘政治',
+  credit_risk: '信用风险', business_expansion: '业务扩张', other: '其他'
+};
+const SENTIMENT_LABELS = { positive: '利好', negative: '利空', neutral: '中性' };
+
 /* ── DASHBOARD DATA ── */
 async function loadDashboard() {
   try {
     const [newsRes, matchRes, statsRes] = await Promise.all([
-      fetch(`${API_BASE}/api/news?limit=30`),
-      fetch(`${API_BASE}/api/results?limit=50`),
+      fetch(`${API_BASE}/api/news?limit=50`),
+      fetch(`${API_BASE}/api/results?limit=100`),
       fetch(`${API_BASE}/api/stats`),
     ]);
     if (newsRes.ok) { const d = await newsRes.json(); newsData = d.news || []; }
@@ -587,10 +612,18 @@ async function loadDashboard() {
       document.getElementById('s-news').textContent = d.news_total ?? newsData.length;
       document.getElementById('s-match').textContent = d.match_total ?? matchData.length;
       document.getElementById('s-match-sub').textContent = `共 ${d.stock_total ?? '—'} 只A股`;
+      const interval = d.collect_interval_sec;
+      document.getElementById('s-news-sub').textContent =
+        interval ? `每 ${interval}s 自动采集` : '';
+      /* 同步后端当前模型到 stat 显示 */
+      if (d.current_model && !cfg.model) cfg.model = d.current_model;
+      if (d.provider && !cfg.provider) cfg.provider = d.provider;
+      updateStatModel();
     }
   } catch (_) {
     newsData = getMockNews();
     matchData = getMockMatches();
+    document.getElementById('s-news-sub').textContent = '（演示数据）';
   }
   renderStats();
   renderNews();
@@ -614,16 +647,17 @@ function renderNews() {
   const el = document.getElementById('news-list');
   if (!filtered.length) { el.innerHTML = '<div class="empty-match">暂无新闻数据</div>'; return; }
   el.innerHTML = filtered.map(n => {
-    const sentLabel = {positive:'利好',negative:'利空',neutral:'中性'}[n.sentiment]||'—';
+    const sentLabel = SENTIMENT_LABELS[n.sentiment] || n.sentiment || '—';
     const kws = (n.keywords||[]).slice(0,2).map(k=>`<span class="news-kw">${k}</span>`).join('');
-    const inds = (n.industries||[]).slice(0,1).map(i=>`<span class="pill pill-info" style="padding:1px 6px">${i}</span>`).join('');
+    const inds = (n.industries||[]).slice(0,1).map(i=>`<span class="pill pill-info" style="padding:1px 6px">${INDUSTRY_LABELS[i]||i}</span>`).join('');
+    const eventLabel = EVENT_LABELS[n.event_type] ? `<span class="news-kw">${EVENT_LABELS[n.event_type]}</span>` : '';
     const ts = n.published_at ? new Date(n.published_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}) : '';
     return `<div class="news-item${selectedNewsId===n.id?' selected':''}" onclick="selectNews('${n.id}')">
       <div class="news-row1">
         <span class="news-title">${n.title}</span>
         <span class="pill pill-${n.sentiment}">${sentLabel}</span>
       </div>
-      <div class="news-meta"><span>${n.source||''}</span><span>${ts}</span>${inds}${kws}</div>
+      <div class="news-meta"><span>${n.source||''}</span><span>${ts}</span>${inds}${eventLabel}${kws}</div>
     </div>`;
   }).join('');
 }
@@ -644,10 +678,11 @@ function renderMatches(match) {
     return;
   }
   el.innerHTML = match.matched_stocks.map((s,i) => {
-    const sc = (s.score*100).toFixed(0);
-    const sem = (s.semantic_score*100).toFixed(0);
-    const ind = (s.industry_score*100).toFixed(0);
-    const pat = (s.patent_score*100).toFixed(0);
+    const sc  = ((s.score          ?? 0) * 100).toFixed(0);
+    const sem = ((s.semantic_score  ?? 0) * 100).toFixed(0);
+    const ind = ((s.industry_score  ?? 0) * 100).toFixed(0);
+    const patHtml = s.patent_score != null
+      ? `<span>专利 ${(s.patent_score*100).toFixed(0)}%</span>` : '';
     return `<div class="match-item">
       <div class="rank${i===0?' r1':''}">${i+1}</div>
       <div style="flex:1;min-width:0">
@@ -655,9 +690,9 @@ function renderMatches(match) {
           <span class="match-name">${s.name}</span>
           <span class="match-code">${s.ts_code}</span>
         </div>
-        <div class="match-reason">${s.reason}</div>
+        <div class="match-reason">${s.reason||''}</div>
         <div style="display:flex;gap:12px;margin-top:5px;font-size:11px;color:var(--text-ter)">
-          <span>语义 ${sem}%</span><span>行业 ${ind}%</span><span>专利 ${pat}%</span>
+          <span>语义 ${sem}%</span><span>行业 ${ind}%</span>${patHtml}
         </div>
       </div>
       <div style="text-align:right;min-width:72px">
