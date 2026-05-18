@@ -609,21 +609,30 @@ async function loadDashboard() {
     if (matchRes.ok) { const d = await matchRes.json(); matchData = d.results || []; }
     if (statsRes.ok) {
       const d = await statsRes.json();
-      document.getElementById('s-news').textContent = d.news_total ?? newsData.length;
+      const newsTotal = d.news_total ?? newsData.length;
+      document.getElementById('s-news').textContent = newsTotal;
       document.getElementById('s-match').textContent = d.match_total ?? matchData.length;
       document.getElementById('s-match-sub').textContent = `共 ${d.stock_total ?? '—'} 只A股`;
       const interval = d.collect_interval_sec;
-      document.getElementById('s-news-sub').textContent =
-        interval ? `每 ${interval}s 自动采集` : '';
+      if (newsTotal === 0) {
+        document.getElementById('s-news-sub').textContent = '尚未采集，点击「立即采集」';
+      } else {
+        document.getElementById('s-news-sub').textContent =
+          interval ? `每 ${interval}s 自动采集` : '';
+      }
       /* 同步后端当前模型到 stat 显示 */
       if (d.current_model && !cfg.model) cfg.model = d.current_model;
       if (d.provider && !cfg.provider) cfg.provider = d.provider;
       updateStatModel();
+    } else {
+      document.getElementById('s-news').textContent = newsData.length || '—';
+      document.getElementById('s-news-sub').textContent = `服务异常 (${statsRes.status})`;
     }
   } catch (_) {
     newsData = getMockNews();
     matchData = getMockMatches();
-    document.getElementById('s-news-sub').textContent = '（演示数据）';
+    document.getElementById('s-news').textContent = newsData.length;
+    document.getElementById('s-news-sub').textContent = '（演示数据，后端未连接）';
   }
   renderStats();
   renderNews();
