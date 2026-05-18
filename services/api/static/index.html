@@ -153,6 +153,34 @@
   .api-test-result.ok { background:var(--bg-success); color:var(--text-success); display:block; }
   .api-test-result.err { background:var(--bg-danger); color:var(--text-danger); display:block; }
 
+  /* NEWSAPI MULTI-KEY */
+  .newsapi-key-row { display:flex; align-items:center; gap:6px; }
+  .newsapi-key-row .pw-wrap { flex:1; }
+  .newsapi-key-row .pw-wrap input { padding-right:36px; }
+  .newsapi-key-status { font-size:10px; padding:2px 6px; border-radius:10px; white-space:nowrap; flex-shrink:0; }
+  .newsapi-key-status.ok  { background:var(--bg-success); color:var(--text-success); }
+  .newsapi-key-status.err { background:var(--bg-danger);  color:var(--text-danger); }
+  .newsapi-key-status.idle{ background:var(--bg-sec);     color:var(--text-ter); }
+  .newsapi-del-btn { background:none; border:none; cursor:pointer; color:var(--text-ter);
+                     font-size:16px; padding:4px; flex-shrink:0; }
+  .newsapi-del-btn:hover { color:var(--text-danger); }
+
+  /* NEWSAPI TOPICS */
+  .topic-chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .topic-chip { display:inline-flex; align-items:center; gap:4px; font-size:12px;
+                padding:4px 10px; border-radius:20px; cursor:pointer; user-select:none;
+                border:0.5px solid var(--border-sec); background:var(--bg-sec);
+                color:var(--text-sec); transition:.12s; }
+  .topic-chip.on { background:var(--bg-info); border-color:var(--border-info); color:var(--text-info); }
+  .topic-chip .chip-del { font-size:14px; line-height:1; opacity:.6; }
+  .topic-chip .chip-del:hover { opacity:1; color:var(--text-danger); }
+  .topic-custom-row { display:flex; gap:6px; margin-top:4px; }
+  .topic-custom-row input { flex:1; font-size:12px; padding:5px 8px;
+    border:0.5px solid var(--border-sec); border-radius:var(--radius-md);
+    background:var(--bg); color:var(--text); font-family:var(--font); }
+  .topic-custom-row input:focus { outline:none; border-color:var(--border-info); }
+  .topic-section-label { font-size:11px; color:var(--text-ter); margin:8px 0 4px; }
+
   @media (max-width: 768px) {
     .two-col, .settings-grid, .stats { grid-template-columns:1fr; }
     .main, .page-settings { padding:12px; }
@@ -183,9 +211,9 @@
   <div class="main">
     <div class="stats">
       <div class="stat">
-        <div class="stat-label">今日新闻</div>
+        <div class="stat-label">新闻总数</div>
         <div class="stat-val" id="s-news">—</div>
-        <div class="stat-sub" id="s-news-sub">加载中...</div>
+        <div class="stat-sub" id="s-news-sub">采集间隔加载中...</div>
       </div>
       <div class="stat">
         <div class="stat-label">匹配成功</div>
@@ -320,6 +348,30 @@
         <div class="toggle-row"><span>东方财富快讯</span><label class="toggle"><input type="checkbox" id="src-eastmoney" checked><span class="toggle-slider"></span></label></div>
         <div class="toggle-row"><span>新浪财经</span><label class="toggle"><input type="checkbox" id="src-sina" checked><span class="toggle-slider"></span></label></div>
         <div class="toggle-row"><span>RSS 聚合（路透 / 财新 / 第一财经）</span><label class="toggle"><input type="checkbox" id="src-rss"><span class="toggle-slider"></span></label></div>
+        <div class="toggle-row"><span>NewsAPI.ai（需配置 API Key）</span><label class="toggle"><input type="checkbox" id="src-newsapi"><span class="toggle-slider"></span></label></div>
+
+        <!-- NewsAPI 主题订阅 -->
+        <div id="newsapi-topics-wrap" style="margin-top:12px;padding:12px;border-radius:var(--radius-md);background:var(--bg-ter);display:none">
+          <div class="form-label" style="margin-bottom:10px">
+            <span>NewsAPI.ai 新闻主题</span>
+            <span style="font-size:11px;color:var(--text-ter)">点击选择，采集时按主题搜索</span>
+          </div>
+
+          <div class="topic-section-label">📌 预设主题（点击启用）</div>
+          <div class="topic-chips" id="preset-topic-chips"></div>
+
+          <div class="topic-section-label">🔖 自定义主题</div>
+          <div class="topic-chips" id="custom-topic-chips"></div>
+          <div class="topic-custom-row">
+            <input type="text" id="topic-custom-input" placeholder="输入主题，如：新能源汽车补贴">
+            <button class="btn" onclick="addCustomTopic()"><i class="ti ti-plus" aria-hidden="true"></i>添加</button>
+          </div>
+
+          <div style="font-size:11px;color:var(--text-ter);margin-top:8px">
+            采集到的新闻会提取大意，便于与 A 股个股对比
+          </div>
+        </div>
+
         <div class="form-row" style="margin-top:14px;margin-bottom:0">
           <div class="form-label">采集间隔（秒）</div>
           <div class="slider-row">
@@ -341,6 +393,19 @@
         <div class="form-row">
           <div class="form-label">分类 Prompt</div>
           <textarea id="prompt-input" rows="5" placeholder="分析以下财经新闻，输出结构化分类JSON。&#10;&#10;新闻标题：{title}&#10;新闻内容：{content}&#10;&#10;输出字段：industries / event_type / sentiment / scope / confidence / keywords"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-label" style="margin-bottom:8px">
+            NewsAPI.ai Keys
+            <a href="https://newsapi.ai/dashboard" target="_blank">获取 Key ↗</a>
+          </div>
+          <div id="newsapi-keys-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
+          <button class="btn" style="width:100%;justify-content:center" onclick="addNewsapiKey()">
+            <i class="ti ti-plus" aria-hidden="true"></i>添加 Key
+          </button>
+          <div style="font-size:11px;color:var(--text-ter);margin-top:6px">
+            多个 Key 自动轮询，额度耗尽后切换下一个
+          </div>
         </div>
         <div class="form-row" style="margin-bottom:0">
           <div class="form-label">
@@ -377,11 +442,11 @@ const API_BASE = '';  /* 同域部署时留空，跨域时填 http://localhost:8
 const PROVIDERS = {
   anthropic: {
     models: ['claude-sonnet-4-20250514','claude-opus-4-20250514','claude-haiku-4-5-20251001'],
-    labels: ['Sonnet 4.5','Opus 4','Haiku 4.5'],
+    labels: ['Sonnet 4','Opus 4','Haiku 4.5'],
     ph: 'sk-ant-api03-...',
     keyLink: 'https://console.anthropic.com/keys',
     docsLink: 'https://docs.anthropic.com/en/docs/about-claude/models/overview',
-    displayName: model => { const m={'claude-sonnet-4-20250514':'Claude Sonnet','claude-opus-4-20250514':'Claude Opus','claude-haiku-4-5-20251001':'Claude Haiku'}; return m[model]||model; }
+    displayName: model => { const m={'claude-sonnet-4-20250514':'Claude Sonnet 4','claude-opus-4-20250514':'Claude Opus 4','claude-haiku-4-5-20251001':'Claude Haiku 4.5'}; return m[model]||model; }
   },
   openai: {
     models: ['gpt-4o','gpt-4o-mini','gpt-4-turbo','o1-preview'],
@@ -424,7 +489,12 @@ const PROVIDERS = {
 
 /* ── STATE ── */
 let cfg = JSON.parse(localStorage.getItem('astock_cfg') || '{}');
-cfg = Object.assign({provider:'anthropic', model:'claude-sonnet-4-20250514', apiKey:'', baseUrl:'', confThreshold:90, topK:5, collectInterval:300, prompt:'', tsToken:'', sources:{cls:true,eastmoney:true,sina:true,rss:false}}, cfg);
+cfg = Object.assign({provider:'anthropic', model:'claude-sonnet-4-20250514', apiKey:'', baseUrl:'', confThreshold:90, topK:5, collectInterval:300, prompt:'', tsToken:'', newsapiKeys:[], newsapiTopics:[], sources:{cls:true,eastmoney:true,sina:true,rss:false,newsapi:false}}, cfg);
+/* 兼容旧版单 key 迁移 */
+if (!Array.isArray(cfg.newsapiKeys)) {
+  cfg.newsapiKeys = cfg.newsapiKey ? [{key: cfg.newsapiKey, label:'账号1'}] : [];
+  delete cfg.newsapiKey;
+}
 
 let newsData = [];
 let matchData = [];
@@ -450,12 +520,18 @@ function applySettingsUI() {
   document.getElementById('int-slider').value = cfg.collectInterval;
   document.getElementById('int-val').textContent = cfg.collectInterval + 's';
   document.getElementById('ts-token').value = cfg.tsToken || '';
+  renderNewsapiKeys();
+  initTopicChips();
+  renderCustomTopics();
+  syncTopicsWrap();
   document.getElementById('prompt-input').value = cfg.prompt || '';
   if (cfg.sources) {
     document.getElementById('src-cls').checked = cfg.sources.cls !== false;
     document.getElementById('src-eastmoney').checked = cfg.sources.eastmoney !== false;
     document.getElementById('src-sina').checked = cfg.sources.sina !== false;
     document.getElementById('src-rss').checked = cfg.sources.rss === true;
+    document.getElementById('src-newsapi').checked = cfg.sources.newsapi === true;
+    document.getElementById('src-newsapi').addEventListener('change', syncTopicsWrap);
   }
   /* select correct model button */
   document.querySelectorAll('#model-btns .model-btn').forEach(btn => {
@@ -466,7 +542,8 @@ function applySettingsUI() {
 
 function updateStatModel() {
   const p = PROVIDERS[cfg.provider] || PROVIDERS.anthropic;
-  document.getElementById('s-model').textContent = p.displayName(cfg.model) || cfg.model || '未配置';
+  const modelName = p.displayName(cfg.model) || cfg.model || '未配置';
+  document.getElementById('s-model').textContent = modelName;
   document.getElementById('s-key-status').textContent = cfg.apiKey ? 'API Key 已配置 ✓' : '⚠ 未配置 API Key';
 }
 
@@ -511,19 +588,31 @@ function saveSettings() {
   cfg.prompt = document.getElementById('prompt-input').value.trim();
   localStorage.setItem('astock_cfg', JSON.stringify(cfg));
   updateStatModel();
-  /* 同步到后端 */
+  /* 构造后端 payload：把当前 provider 对应的 key 字段名传对 */
+  const keyFieldMap = {
+    anthropic: 'anthropic_api_key', openai: 'openai_api_key',
+    qwen: 'qwen_api_key', zhipu: 'zhipu_api_key',
+    deepseek: 'deepseek_api_key', custom: 'anthropic_api_key',
+  };
+  const keyField = keyFieldMap[cfg.provider] || 'anthropic_api_key';
+  /* newsapiKeys 已由 addNewsapiKey/deleteNewsapiKey 实时维护，此处只需保存 */
+  localStorage.setItem('astock_cfg', JSON.stringify(cfg));
+  const activeKeys = cfg.newsapiKeys.map(k => k.key).filter(Boolean);
+  const payload = {
+    provider: cfg.provider,
+    model: cfg.model,
+    [keyField]: cfg.apiKey || undefined,
+    bert_confidence_threshold: cfg.confThreshold / 100,
+    top_k_stocks: cfg.topK,
+    tushare_token: cfg.tsToken || undefined,
+    newsapi_ai_keys: activeKeys.length ? activeKeys : undefined,
+    classify_prompt: cfg.prompt || undefined,
+  };
+  if (cfg.provider === 'custom' && cfg.baseUrl) payload.custom_base_url = cfg.baseUrl;
   fetch(`${API_BASE}/api/config`, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({
-      anthropic_api_key: cfg.provider==='anthropic' ? cfg.apiKey : undefined,
-      openai_api_key: cfg.provider==='openai' ? cfg.apiKey : undefined,
-      model: cfg.model,
-      bert_confidence_threshold: cfg.confThreshold / 100,
-      top_k_stocks: cfg.topK,
-      tushare_token: cfg.tsToken,
-      classify_prompt: cfg.prompt,
-    })
+    body: JSON.stringify(payload)
   }).catch(() => {});
   showToast('配置已保存');
 }
@@ -535,14 +624,173 @@ function saveCollectSettings() {
     eastmoney: document.getElementById('src-eastmoney').checked,
     sina: document.getElementById('src-sina').checked,
     rss: document.getElementById('src-rss').checked,
+    newsapi: document.getElementById('src-newsapi').checked,
   };
   localStorage.setItem('astock_cfg', JSON.stringify(cfg));
+  const activeTopics = getActiveTopics();
   fetch(`${API_BASE}/api/config`, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({collect_interval: cfg.collectInterval, ...cfg.sources})
+    body: JSON.stringify({collect_interval: cfg.collectInterval, ...cfg.sources,
+      newsapi_topics: activeTopics})
   }).catch(() => {});
   showToast('采集配置已保存');
+}
+
+/* ── NEWSAPI 主题订阅管理 ── */
+
+const PRESET_TOPICS = [
+  { id: 'intl_major',   label: '🌍 国际重要新闻',  query: 'world major news geopolitics' },
+  { id: 'china_major',  label: '🇨🇳 中国重要新闻',  query: '中国 重要新闻 政策' },
+  { id: 'china_econ',   label: '📊 中国经济政策',   query: '中国经济 货币政策 财政政策' },
+  { id: 'us_econ',      label: '🇺🇸 美国经济数据',  query: 'US economy Fed interest rate CPI' },
+  { id: 'trade_war',    label: '⚔️ 中美贸易',       query: '中美贸易 关税 制裁' },
+  { id: 'semiconductor',label: '💻 半导体芯片',      query: '半导体 芯片 光刻机 国产替代' },
+  { id: 'new_energy',   label: '⚡ 新能源',          query: '新能源 锂电池 光伏 风电' },
+  { id: 'ai_tech',      label: '🤖 AI科技',          query: 'AI人工智能 大模型 机器人' },
+  { id: 'real_estate',  label: '🏠 房地产',          query: '房地产 楼市 限购 降息' },
+  { id: 'military',     label: '🛡️ 军事地缘',        query: '军事 地缘政治 台海 南海' },
+  { id: 'commodity',    label: '🛢️ 大宗商品',        query: '原油 黄金 铁矿石 铜 大宗商品' },
+  { id: 'finance',      label: '🏦 金融市场',        query: '美联储 人民币汇率 外汇 利率' },
+  { id: 'douyin_hot',   label: '📱 抖音热搜',        query: '抖音热搜 热点话题 社会事件' },
+  { id: 'weibo_hot',    label: '🔥 微博热搜',        query: '微博热搜 舆论热点' },
+  { id: 'bio_pharma',   label: '💊 医药生物',        query: '医药 生物科技 新药 集采' },
+  { id: 'auto',         label: '🚗 汽车行业',        query: '汽车 新能源车 造车 出海' },
+];
+
+function syncTopicsWrap() {
+  const on = document.getElementById('src-newsapi')?.checked;
+  const wrap = document.getElementById('newsapi-topics-wrap');
+  if (wrap) wrap.style.display = on ? 'block' : 'none';
+}
+
+function initTopicChips() {
+  const container = document.getElementById('preset-topic-chips');
+  if (!container) return;
+  const active = new Set((cfg.newsapiTopics || []).map(t => t.id));
+  container.innerHTML = PRESET_TOPICS.map(t =>
+    `<span class="topic-chip${active.has(t.id) ? ' on' : ''}" onclick="togglePresetTopic('${t.id}', this)">${t.label}</span>`
+  ).join('');
+}
+
+function togglePresetTopic(id, el) {
+  el.classList.toggle('on');
+  const on = el.classList.contains('on');
+  const topic = PRESET_TOPICS.find(t => t.id === id);
+  if (!topic) return;
+  if (on) {
+    if (!cfg.newsapiTopics.find(t => t.id === id)) {
+      cfg.newsapiTopics.push({ id: topic.id, label: topic.label, query: topic.query, type: 'preset' });
+    }
+  } else {
+    cfg.newsapiTopics = cfg.newsapiTopics.filter(t => t.id !== id);
+  }
+  localStorage.setItem('astock_cfg', JSON.stringify(cfg));
+}
+
+function renderCustomTopics() {
+  const container = document.getElementById('custom-topic-chips');
+  if (!container) return;
+  const customs = cfg.newsapiTopics.filter(t => t.type === 'custom');
+  if (!customs.length) {
+    container.innerHTML = '<span style="font-size:12px;color:var(--text-ter)">暂无自定义主题</span>';
+    return;
+  }
+  container.innerHTML = customs.map((t, i) =>
+    `<span class="topic-chip on">
+      ${t.label}
+      <span class="chip-del" onclick="deleteCustomTopic('${t.id}')" title="删除">×</span>
+    </span>`
+  ).join('');
+}
+
+function addCustomTopic() {
+  const inp = document.getElementById('topic-custom-input');
+  const val = inp.value.trim();
+  if (!val) return;
+  const id = 'custom_' + Date.now();
+  cfg.newsapiTopics.push({ id, label: val, query: val, type: 'custom' });
+  localStorage.setItem('astock_cfg', JSON.stringify(cfg));
+  inp.value = '';
+  renderCustomTopics();
+}
+
+function deleteCustomTopic(id) {
+  cfg.newsapiTopics = cfg.newsapiTopics.filter(t => t.id !== id);
+  localStorage.setItem('astock_cfg', JSON.stringify(cfg));
+  renderCustomTopics();
+}
+
+function getActiveTopics() {
+  return cfg.newsapiTopics.map(t => ({ id: t.id, label: t.label, query: t.query }));
+}
+
+/* Enter 键快捷添加自定义主题 */
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('topic-custom-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') addCustomTopic();
+  });
+});
+
+/* ── NEWSAPI MULTI-KEY 管理 ── */
+
+function renderNewsapiKeys() {
+  const container = document.getElementById('newsapi-keys-list');
+  if (!container) return;
+  if (!cfg.newsapiKeys.length) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--text-ter);padding:4px 0">尚未添加 Key</div>';
+    return;
+  }
+  container.innerHTML = cfg.newsapiKeys.map((item, i) => {
+    const statusClass = item.status === 'ok' ? 'ok' : item.status === 'err' ? 'err' : 'idle';
+    const statusText  = item.status === 'ok' ? '有效' : item.status === 'err' ? '失效' : '未验证';
+    const labelText   = item.label || ('账号' + (i + 1));
+    return `<div class="newsapi-key-row">
+      <div class="pw-wrap">
+        <input type="password" id="newsapi-key-${i}" value="${item.key}"
+          placeholder="${labelText}"
+          oninput="updateNewsapiKey(${i}, this.value)"
+          style="padding-right:36px">
+        <button class="pw-eye" onclick="toggleNewsapiVis(${i})" aria-label="显示/隐藏">
+          <i class="ti ti-eye" id="newsapi-eye-${i}" aria-hidden="true"></i>
+        </button>
+      </div>
+      <span class="newsapi-key-status ${statusClass}">${statusText}</span>
+      <button class="newsapi-del-btn" onclick="deleteNewsapiKey(${i})" title="删除">
+        <i class="ti ti-trash" aria-hidden="true"></i>
+      </button>
+    </div>`;
+  }).join('');
+}
+
+function addNewsapiKey() {
+  cfg.newsapiKeys.push({ key: '', label: '账号' + (cfg.newsapiKeys.length + 1), status: 'idle' });
+  renderNewsapiKeys();
+  /* 聚焦到新输入框 */
+  const idx = cfg.newsapiKeys.length - 1;
+  setTimeout(() => document.getElementById('newsapi-key-' + idx)?.focus(), 50);
+}
+
+function updateNewsapiKey(i, val) {
+  if (cfg.newsapiKeys[i]) {
+    cfg.newsapiKeys[i].key = val.trim();
+    cfg.newsapiKeys[i].status = 'idle';   /* 改动后重置验证状态 */
+    localStorage.setItem('astock_cfg', JSON.stringify(cfg));
+  }
+}
+
+function deleteNewsapiKey(i) {
+  cfg.newsapiKeys.splice(i, 1);
+  renderNewsapiKeys();
+  localStorage.setItem('astock_cfg', JSON.stringify(cfg));
+}
+
+function toggleNewsapiVis(i) {
+  const inp = document.getElementById('newsapi-key-' + i);
+  const ico = document.getElementById('newsapi-eye-' + i);
+  if (!inp) return;
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  ico.className = inp.type === 'password' ? 'ti ti-eye' : 'ti ti-eye-off';
 }
 
 function resetPrompt() {
@@ -572,25 +820,58 @@ async function testApiKey() {
   }
 }
 
+/* ── 枚举翻译映射（与后端 shared/models.py 保持一致） ── */
+const INDUSTRY_LABELS = {
+  semiconductor: '半导体', new_energy: '新能源', ai_robot: 'AI/机器人',
+  biotech: '生物医药', military: '军工', finance: '金融',
+  consumer: '消费', real_estate: '房地产', automobile: '汽车',
+  new_materials: '新材料', macro: '宏观', other: '其他'
+};
+const EVENT_LABELS = {
+  policy_positive: '政策利好', policy_negative: '政策利空',
+  tech_breakthrough: '技术突破', earnings_beat: '业绩超预期',
+  earnings_miss: '业绩不及预期', merger_acquisition: '并购重组',
+  macro_data: '宏观数据', geopolitics: '地缘政治',
+  credit_risk: '信用风险', business_expansion: '业务扩张', other: '其他'
+};
+const SENTIMENT_LABELS = { positive: '利好', negative: '利空', neutral: '中性' };
+
 /* ── DASHBOARD DATA ── */
 async function loadDashboard() {
   try {
     const [newsRes, matchRes, statsRes] = await Promise.all([
-      fetch(`${API_BASE}/api/news?limit=30`),
-      fetch(`${API_BASE}/api/results?limit=50`),
+      fetch(`${API_BASE}/api/news?limit=50`),
+      fetch(`${API_BASE}/api/results?limit=100`),
       fetch(`${API_BASE}/api/stats`),
     ]);
     if (newsRes.ok) { const d = await newsRes.json(); newsData = d.news || []; }
     if (matchRes.ok) { const d = await matchRes.json(); matchData = d.results || []; }
     if (statsRes.ok) {
       const d = await statsRes.json();
-      document.getElementById('s-news').textContent = d.news_total ?? newsData.length;
+      const newsTotal = d.news_total ?? newsData.length;
+      document.getElementById('s-news').textContent = newsTotal;
       document.getElementById('s-match').textContent = d.match_total ?? matchData.length;
       document.getElementById('s-match-sub').textContent = `共 ${d.stock_total ?? '—'} 只A股`;
+      const interval = d.collect_interval_sec;
+      if (newsTotal === 0) {
+        document.getElementById('s-news-sub').textContent = '尚未采集，点击「立即采集」';
+      } else {
+        document.getElementById('s-news-sub').textContent =
+          interval ? `每 ${interval}s 自动采集` : '';
+      }
+      /* 同步后端当前模型到 stat 显示 */
+      if (d.current_model && !cfg.model) cfg.model = d.current_model;
+      if (d.provider && !cfg.provider) cfg.provider = d.provider;
+      updateStatModel();
+    } else {
+      document.getElementById('s-news').textContent = newsData.length || '—';
+      document.getElementById('s-news-sub').textContent = `服务异常 (${statsRes.status})`;
     }
   } catch (_) {
     newsData = getMockNews();
     matchData = getMockMatches();
+    document.getElementById('s-news').textContent = newsData.length;
+    document.getElementById('s-news-sub').textContent = '（演示数据，后端未连接）';
   }
   renderStats();
   renderNews();
@@ -614,16 +895,17 @@ function renderNews() {
   const el = document.getElementById('news-list');
   if (!filtered.length) { el.innerHTML = '<div class="empty-match">暂无新闻数据</div>'; return; }
   el.innerHTML = filtered.map(n => {
-    const sentLabel = {positive:'利好',negative:'利空',neutral:'中性'}[n.sentiment]||'—';
+    const sentLabel = SENTIMENT_LABELS[n.sentiment] || n.sentiment || '—';
     const kws = (n.keywords||[]).slice(0,2).map(k=>`<span class="news-kw">${k}</span>`).join('');
-    const inds = (n.industries||[]).slice(0,1).map(i=>`<span class="pill pill-info" style="padding:1px 6px">${i}</span>`).join('');
+    const inds = (n.industries||[]).slice(0,1).map(i=>`<span class="pill pill-info" style="padding:1px 6px">${INDUSTRY_LABELS[i]||i}</span>`).join('');
+    const eventLabel = EVENT_LABELS[n.event_type] ? `<span class="news-kw">${EVENT_LABELS[n.event_type]}</span>` : '';
     const ts = n.published_at ? new Date(n.published_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}) : '';
     return `<div class="news-item${selectedNewsId===n.id?' selected':''}" onclick="selectNews('${n.id}')">
       <div class="news-row1">
         <span class="news-title">${n.title}</span>
         <span class="pill pill-${n.sentiment}">${sentLabel}</span>
       </div>
-      <div class="news-meta"><span>${n.source||''}</span><span>${ts}</span>${inds}${kws}</div>
+      <div class="news-meta"><span>${n.source||''}</span><span>${ts}</span>${inds}${eventLabel}${kws}</div>
     </div>`;
   }).join('');
 }
@@ -644,10 +926,11 @@ function renderMatches(match) {
     return;
   }
   el.innerHTML = match.matched_stocks.map((s,i) => {
-    const sc = (s.score*100).toFixed(0);
-    const sem = (s.semantic_score*100).toFixed(0);
-    const ind = (s.industry_score*100).toFixed(0);
-    const pat = (s.patent_score*100).toFixed(0);
+    const sc  = ((s.score          ?? 0) * 100).toFixed(0);
+    const sem = ((s.semantic_score  ?? 0) * 100).toFixed(0);
+    const ind = ((s.industry_score  ?? 0) * 100).toFixed(0);
+    const patHtml = s.patent_score != null
+      ? `<span>专利 ${(s.patent_score*100).toFixed(0)}%</span>` : '';
     return `<div class="match-item">
       <div class="rank${i===0?' r1':''}">${i+1}</div>
       <div style="flex:1;min-width:0">
@@ -655,9 +938,9 @@ function renderMatches(match) {
           <span class="match-name">${s.name}</span>
           <span class="match-code">${s.ts_code}</span>
         </div>
-        <div class="match-reason">${s.reason}</div>
+        <div class="match-reason">${s.reason||''}</div>
         <div style="display:flex;gap:12px;margin-top:5px;font-size:11px;color:var(--text-ter)">
-          <span>语义 ${sem}%</span><span>行业 ${ind}%</span><span>专利 ${pat}%</span>
+          <span>语义 ${sem}%</span><span>行业 ${ind}%</span>${patHtml}
         </div>
       </div>
       <div style="text-align:right;min-width:72px">
@@ -684,12 +967,25 @@ function switchTab(page, btn) {
 }
 
 async function triggerCollect() {
+  const btn = document.querySelector('.nav-right .btn');
+  if (btn) { btn.disabled = true; }
   showToast('采集中...', true);
   try {
-    await fetch(`${API_BASE}/api/collect`, {method:'POST'});
-    showToast('采集完成，数据已更新');
+    const res = await fetch(`${API_BASE}/api/collect`, {method:'POST'});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = data.detail || data.message || `HTTP ${res.status}`;
+      showToast('采集失败：' + detail);
+      return;
+    }
+    const count = data.collected ?? data.new_count ?? 0;
+    showToast(count > 0 ? `采集完成，新增 ${count} 条新闻` : '采集完成（无新增）');
     loadDashboard();
-  } catch (_) { showToast('请求失败，请检查服务状态'); }
+  } catch (err) {
+    showToast('无法连接后端：' + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; }
+  }
 }
 
 function toggleVis(inputId, iconId) {

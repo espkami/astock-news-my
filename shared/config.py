@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     # API Keys
     anthropic_api_key: str = ""
     tushare_token: str = ""
+    newsapi_ai_key: str = ""      # newsapi.ai 单 key（兼容旧版）
+    newsapi_ai_keys: str = ""     # 多 key 逗号分隔，如 key1,key2,key3
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/astock_news"
@@ -25,6 +27,7 @@ class Settings(BaseSettings):
     enable_eastmoney: bool = True
     enable_sina: bool = True
     enable_rss: bool = True
+    enable_newsapi: bool = False   # newsapi.ai 默认关闭，配置 key 后手动开启
 
     # Logging
     log_level: str = "INFO"

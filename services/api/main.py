@@ -59,6 +59,7 @@ def apply_runtime_cfg(data: dict):
     mapping = {
         "anthropic_api_key": "ANTHROPIC_API_KEY",
         "tushare_token":     "TUSHARE_TOKEN",
+        "newsapi_ai_key":    "NEWSAPI_AI_KEY",   # 单 key 兼容
         "collect_interval":  "COLLECT_INTERVAL",
         "bert_confidence_threshold": "BERT_CONFIDENCE_THRESHOLD",
         "top_k_stocks":      "TOP_K_STOCKS",
@@ -83,9 +84,24 @@ def apply_runtime_cfg(data: dict):
 
     # 更新新闻源开关
     for src_key, attr in [("cls","enable_cls"),("eastmoney","enable_eastmoney"),
-                           ("sina","enable_sina"),("rss","enable_rss")]:
+                           ("sina","enable_sina"),("rss","enable_rss"),("newsapi","enable_newsapi")]:
         if src_key in data:
             setattr(settings, attr, bool(data[src_key]))
+
+    # 多 key 列表：合并单 key 兼容
+    if "newsapi_ai_keys" in data and data["newsapi_ai_keys"]:
+        keys = [k for k in data["newsapi_ai_keys"] if k and k.strip()]
+        if keys:
+            os.environ["NEWSAPI_AI_KEYS"] = ",".join(keys)
+            os.environ["NEWSAPI_AI_KEY"]  = keys[0]   # 首个 key 兼容旧采集器
+            logger.info(f"[NewsAPI] 已加载 {len(keys)} 个 Key")
+
+    # 主题订阅：序列化为 JSON 存入环境变量，采集器读取
+    if "newsapi_topics" in data and data["newsapi_topics"]:
+        import json as _json
+        topics_json = _json.dumps(data["newsapi_topics"], ensure_ascii=False)
+        os.environ["NEWSAPI_TOPICS"] = topics_json
+        logger.info(f"[NewsAPI] 已更新 {len(data['newsapi_topics'])} 个订阅主题")
 
     logger.info(f"运行时配置已更新: {list(data.keys())}")
 
@@ -98,7 +114,7 @@ async def run_pipeline(db: AsyncSession):
     raw_news_list = await collector.collect_all()
     if not raw_news_list:
         logger.info("本次无新增新闻")
-        return
+        return 0
 
     existing_ids: set[str] = set()
     for news in raw_news_list:
@@ -107,7 +123,7 @@ async def run_pipeline(db: AsyncSession):
     new_news = [n for n in raw_news_list if n.id not in existing_ids]
     logger.info(f"过滤后新增: {len(new_news)} 条")
     if not new_news:
-        return
+        return 0
 
     classified = classifier.classify_batch(new_news)
     results    = engine.match_batch(classified)
@@ -141,6 +157,7 @@ async def run_pipeline(db: AsyncSession):
 
     await db.commit()
     logger.info(f"=== 流水线完成: {len(classified)} 分类, {len(results)} 匹配 ===")
+    return len(new_news)
 
 
 # ─── 生命周期 ─────────────────────────────────────────────────────────────────
@@ -237,10 +254,14 @@ class ConfigPayload(BaseModel):
     top_k_stocks:               Optional[int]   = None
     collect_interval:           Optional[int]   = None   # 秒
     classify_prompt:            Optional[str]   = None
+    newsapi_ai_key:             Optional[str]   = None   # 兼容旧版单 key
+    newsapi_ai_keys:            Optional[list]  = None   # 多 key 轮询
+    newsapi_topics:             Optional[list]  = None   # 主题订阅列表
     cls:                        Optional[bool]  = None
     eastmoney:                  Optional[bool]  = None
     sina:                       Optional[bool]  = None
     rss:                        Optional[bool]  = None
+    newsapi:                    Optional[bool]  = None
 
 
 @app.post("/api/config", tags=["配置"], summary="动态更新运行时配置")
@@ -338,8 +359,12 @@ async def test_api_key(payload: TestKeyPayload):
 
 @app.post("/api/collect", tags=["流水线"], summary="手动触发采集流水线")
 async def manual_collect(db: AsyncSession = Depends(get_db)):
-    await run_pipeline(db)
-    return {"message": "流水线执行完成"}
+    try:
+        collected = await run_pipeline(db)
+        return {"status": "ok", "message": "流水线执行完成", "collected": collected or 0}
+    except Exception as e:
+        logger.error(f"手动采集失败: {e}")
+        raise HTTPException(status_code=500, detail=f"采集失败: {str(e)[:200]}")
 
 
 @app.get("/api/results", tags=["查询"], summary="获取匹配结果")
