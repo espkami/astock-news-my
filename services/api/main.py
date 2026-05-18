@@ -60,6 +60,7 @@ def apply_runtime_cfg(data: dict):
         "anthropic_api_key": "ANTHROPIC_API_KEY",
         "tushare_token":     "TUSHARE_TOKEN",
         "newsapi_ai_key":    "NEWSAPI_AI_KEY",   # 单 key 兼容
+        "schedule_time":    "SCHEDULE_TIME",
         "collect_interval":  "COLLECT_INTERVAL",
         "bert_confidence_threshold": "BERT_CONFIDENCE_THRESHOLD",
         "top_k_stocks":      "TOP_K_STOCKS",
@@ -77,10 +78,29 @@ def apply_runtime_cfg(data: dict):
         settings.top_k_stocks = int(data["top_k_stocks"])
 
     # 更新采集间隔：重新调度
-    if "collect_interval" in data:
-        interval = int(data["collect_interval"])
+    # schedule_time 优先，格式 HH:MM
+    schedule_time = data.get("schedule_time") or _runtime_cfg.get("schedule_time", "06:00")
+    try:
+        s_hour, s_min = [int(x) for x in schedule_time.split(":")]
+    except Exception:
+        s_hour, s_min = 6, 0
+
+    if "collect_interval" in data or "schedule_time" in data:
+        interval = int(data.get("collect_interval", _runtime_cfg.get("collect_interval", 86400)))
         if scheduler.running:
-            scheduler.reschedule_job("news_pipeline", trigger="interval", seconds=interval)
+            try:
+                if interval <= 0:
+                    scheduler.pause_job("news_pipeline")
+                    logger.info("自动采集已暂停（仅手动触发）")
+                else:
+                    scheduler.reschedule_job(
+                        "news_pipeline", trigger="cron",
+                        hour=s_hour, minute=s_min,
+                        timezone="Asia/Shanghai"
+                    )
+                    logger.info(f"定时任务更新：每天 {s_hour:02d}:{s_min:02d}")
+            except Exception as e:
+                logger.warning(f"reschedule 失败: {e}")
 
     # 更新新闻源开关
     for src_key, attr in [("cls","enable_cls"),("eastmoney","enable_eastmoney"),
@@ -172,15 +192,38 @@ async def lifespan(app: FastAPI):
         async for db in get_db():
             await run_pipeline(db)
 
-    scheduler.add_job(
-        scheduled_pipeline,
-        trigger="interval",
-        seconds=settings.collect_interval,
-        id="news_pipeline",
-        next_run_time=datetime.now(),
-    )
+    # 默认每天 06:00 (Asia/Shanghai) 自动采集一次
+    # collect_interval=0 表示关闭自动采集，仅手动触发
+    interval = settings.collect_interval
+    if interval and interval > 0:
+        if interval >= 86400:
+            # 每天定时：从环境变量读取时间点，默认 06:00
+            raw_time = os.environ.get("SCHEDULE_TIME", "06:00")
+            try:
+                s_h, s_m = [int(x) for x in raw_time.split(":")]
+            except Exception:
+                s_h, s_m = 6, 0
+            scheduler.add_job(
+                scheduled_pipeline,
+                trigger="cron",
+                hour=s_h, minute=s_m,
+                timezone="Asia/Shanghai",
+                id="news_pipeline",
+            )
+            logger.info(f"定时任务：每天 {s_h:02d}:{s_m:02d} 自动采集")
+        else:
+            # 自定义间隔（小时级）
+            scheduler.add_job(
+                scheduled_pipeline,
+                trigger="interval",
+                seconds=interval,
+                id="news_pipeline",
+            )
+            logger.info(f"定时任务：每 {interval}s 自动采集")
+    else:
+        logger.info("自动采集已关闭，仅支持手动触发")
+
     scheduler.start()
-    logger.info(f"定时任务启动，间隔 {settings.collect_interval}s")
     yield
     scheduler.shutdown()
     logger.info("服务已关闭")
@@ -257,6 +300,7 @@ class ConfigPayload(BaseModel):
     newsapi_ai_key:             Optional[str]   = None   # 兼容旧版单 key
     newsapi_ai_keys:            Optional[list]  = None   # 多 key 轮询
     newsapi_topics:             Optional[list]  = None   # 主题订阅列表
+    schedule_time:              Optional[str]   = None   # 定时时间点 HH:MM
     cls:                        Optional[bool]  = None
     eastmoney:                  Optional[bool]  = None
     sina:                       Optional[bool]  = None

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # Service tuning
-    collect_interval: int = 300
+    collect_interval: int = 86400   # 默认每天一次（0=关闭自动采集）
     bert_confidence_threshold: float = 0.90
     top_k_stocks: int = 5
     vector_dim: int = 768
