@@ -1,5 +1,5 @@
 # ── 阶段1：依赖构建 ───────────────────────────────────────────
-FROM python:3.10-slim
+FROM python:3.10-slim AS builder
 
 WORKDIR /build
 
@@ -15,7 +15,7 @@ RUN pip install --upgrade pip && \
 
 
 # ── 阶段2：运行镜像 ───────────────────────────────────────────
-FROM python:3.11-slim AS runtime
+FROM python:3.10-slim AS runtime
 
 WORKDIR /app
 
@@ -34,7 +34,9 @@ COPY . .
 RUN mkdir -p /app/data/faiss_index
 
 # 非 root 用户运行
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+RUN useradd -m -u 1000 appuser && \
+    mkdir -p /app/model_cache && \
+    chown -R appuser:appuser /app
 USER appuser
 
 # 预热：提前下载向量模型（构建时缓存）
