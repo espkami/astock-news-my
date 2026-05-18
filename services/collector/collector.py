@@ -1,15 +1,17 @@
 """
 services/collector/collector.py
-新闻采集服务 — 异步多源采集（财联社 / 东方财富 / 新浪财经 / RSS）
+新闻采集服务 — 完全基于 worldmonitor 架构重写
 
-修复说明（参考 worldmonitor/server/worldmonitor/news/v1/ 实现）：
-1. 财联社 API URL 已更新，增加必要请求头
-2. 东方财富改用可用的快讯接口
-3. 新浪财经改用 JSON API，不再依赖易变的 HTML 结构
-4. RSS 源全部换成当前可用地址，并新增 A 股专项 Google News RSS
-5. 增加 HTML 嗅探过滤（同 worldmonitor looksLikeRssXml），避免 Cloudflare 拦截页进缓存
-6. 增加严格的日期校验，拒绝未来时间戳和无时间戳条目（同 worldmonitor U2/R2）
-7. 网络请求增加更完整的浏览器 User-Agent 和 Accept-Language 头
+核心设计（来自 worldmonitor/server/worldmonitor/news/v1/）：
+1. 全面改用 Google News RSS 作为主要数据源
+   - worldmonitor 的 gn() 函数：用 Google News 搜索代理任意来源
+   - Google News 本身不被 WAF 封锁，且聚合了所有主流财经媒体内容
+   - 支持 site: 过滤、when: 时间窗口、关键词搜索
+2. 直连可靠的国际 RSS（CNBC / Yahoo Finance / SEC 等）
+3. 严格的 HTML 嗅探（looksLikeRssXml）
+4. 严格日期门控（未来时间/无时间戳一律丢弃）
+5. 重要性评分系统（来自 worldmonitor computeImportanceScore）
+6. 关键词分类器（来自 worldmonitor _classifier.ts，适配 A 股）
 """
 from __future__ import annotations
 
@@ -32,32 +34,255 @@ from shared.config import get_settings
 
 settings = get_settings()
 
-# ── 请求头（模拟 Chrome，参考 worldmonitor CHROME_UA） ─────────────────────────
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
+# ── Chrome UA（与 worldmonitor CHROME_UA 一致）──────────────────────────────
+CHROME_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
 
 RSS_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": CHROME_UA,
     "Accept": "application/rss+xml, application/xml, text/xml, */*",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 
-# 未来时间宽限（同 worldmonitor FUTURE_DATE_TOLERANCE_MS = 1h）
+# 未来时间宽限 1h（同 worldmonitor FUTURE_DATE_TOLERANCE_MS）
 FUTURE_TOLERANCE = timedelta(hours=1)
 
+# 新闻最大年龄 96h（同 worldmonitor 默认 NEWS_MAX_AGE_HOURS=96）
+MAX_NEWS_AGE = timedelta(hours=96)
 
-# ─── 工具函数 ─────────────────────────────────────────────────────────────────
+# 每个 feed 最多取条数（同 worldmonitor ITEMS_PER_FEED=5）
+ITEMS_PER_FEED = 8
+
+# ── Google News RSS 辅助函数（移植自 worldmonitor gn()）──────────────────────
+def gn(query: str) -> str:
+    """
+    构建 Google News RSS URL。
+    这是 worldmonitor 的核心技巧：用 Google News 搜索代理所有新闻源，
+    绕过各站点的 WAF 封锁，同时获得 Google 聚合的权威时间戳。
+    """
+    return (
+        "https://news.google.com/rss/search"
+        f"?q={urllib.parse.quote(query)}"
+        "&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+    )
+
+
+def gn_en(query: str) -> str:
+    """英文版 Google News RSS（用于国际财经）"""
+    return (
+        "https://news.google.com/rss/search"
+        f"?q={urllib.parse.quote(query)}"
+        "&hl=en-US&gl=US&ceid=US:en"
+    )
+
+
+# ── A 股新闻源定义（对标 worldmonitor VARIANT_FEEDS finance/asia 变体）────────
+#
+# 设计原则（来自 worldmonitor _feeds.ts 注释）：
+# - 直连 RSS：用于有稳定 RSS 且不封 IP 的国际媒体（CNBC/Yahoo等）
+# - Google News RSS：用于国内媒体（避免 WAF）和关键词聚合
+# - site: 过滤：精确锁定权威来源（参考 worldmonitor "site:reuters.com"模式）
+# - when: 时间窗口：控制新鲜度（1d/2d/3d）
+
+ASTOCK_FEEDS: list[tuple[str, str]] = [
+
+    # ══════════════════════════════════════════════════════════════════
+    # A 股核心（Google News 聚合，绕过国内媒体 WAF）
+    # ══════════════════════════════════════════════════════════════════
+
+    # 沪深大盘 & 指数
+    ("A股大盘",    gn("上证指数 OR 沪深300 OR A股 行情 when:1d")),
+    # 龙头股 & 涨停
+    ("龙头涨停",   gn("涨停板 OR 龙头股 OR 连板 when:1d")),
+    # 主力资金
+    ("主力资金",   gn("北向资金 OR 主力资金 OR 大单流入 A股 when:1d")),
+    # 上市公司公告（业绩/定增/回购）
+    ("公司公告",   gn("上市公司 业绩预告 OR 定增 OR 回购 OR 分红 when:1d")),
+    # 行业板块热点
+    ("行业热点",   gn("A股 板块 涨幅 OR 行业 轮动 when:1d")),
+
+    # ══════════════════════════════════════════════════════════════════
+    # 宏观政策（监管层动态）
+    # ══════════════════════════════════════════════════════════════════
+
+    # 证监会
+    ("证监会",     gn("site:csrc.gov.cn OR 证监会 政策 监管 when:2d")),
+    # 央行货币政策
+    ("央行政策",   gn("央行 OR 人民银行 降准 OR 降息 OR LPR when:2d")),
+    # 财政部/发改委
+    ("财政政策",   gn("财政部 OR 发改委 政策 刺激 OR 补贴 when:2d")),
+    # 国务院重大政策
+    ("国务院",     gn("国务院 政策 OR 经济 OR 产业 when:2d")),
+
+    # ══════════════════════════════════════════════════════════════════
+    # 权威财经媒体（Google News site: 过滤，参考 worldmonitor 模式）
+    # ══════════════════════════════════════════════════════════════════
+
+    # 财联社（中国最快财经电报）
+    ("财联社",     gn("site:cls.cn when:1d")),
+    # 证券时报
+    ("证券时报",   gn("site:stcn.com when:1d")),
+    # 上海证券报
+    ("上证报",     gn("site:cnstock.com when:1d")),
+    # 中国证券报
+    ("中证报",     gn("site:cs.com.cn when:1d")),
+    # 第一财经
+    ("第一财经",   gn("site:yicai.com when:1d")),
+    # 财新网
+    ("财新",       gn("site:caixin.com when:1d")),
+    # 21世纪经济报道
+    ("21财经",     gn("site:21jingji.com when:1d")),
+    # 东方财富网
+    ("东方财富",   gn("site:eastmoney.com when:1d")),
+    # 同花顺
+    ("同花顺",     gn("site:10jqka.com.cn 新闻 when:1d")),
+
+    # ══════════════════════════════════════════════════════════════════
+    # A 股专题关键词（参考 worldmonitor 关键词聚合模式）
+    # ══════════════════════════════════════════════════════════════════
+
+    # 新能源/锂电/光伏（当前热门赛道）
+    ("新能源",     gn("新能源 OR 锂电 OR 光伏 A股 when:1d")),
+    # 半导体/芯片
+    ("半导体",     gn("半导体 OR 芯片 国产替代 A股 when:2d")),
+    # 人工智能
+    ("AI概念",     gn("人工智能 OR AI 大模型 A股 概念股 when:1d")),
+    # 医药生物
+    ("医药",       gn("医药 OR 生物医疗 OR CXO A股 when:2d")),
+    # 消费/白马
+    ("消费白马",   gn("消费 OR 白酒 OR 白马股 A股 when:2d")),
+
+    # ══════════════════════════════════════════════════════════════════
+    # 国际财经（直连稳定 RSS，来自 worldmonitor rss-allowed-domains.json）
+    # ══════════════════════════════════════════════════════════════════
+
+    # CNBC 市场（worldmonitor tier-2 源）
+    ("CNBC Markets",   "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
+    # Yahoo Finance（worldmonitor 白名单）
+    ("Yahoo Finance",  "https://finance.yahoo.com/rss/topstories"),
+    # SEC 公告（worldmonitor gov tier-1）
+    ("SEC",            "https://www.sec.gov/news/pressreleases.rss"),
+    # 美联储（worldmonitor gov tier-1）
+    ("Federal Reserve","https://www.federalreserve.gov/feeds/press_all.xml"),
+
+    # ══════════════════════════════════════════════════════════════════
+    # 亚太财经（影响 A 股的外部因素）
+    # ══════════════════════════════════════════════════════════════════
+
+    # 日经亚洲（Google News 代理，同 worldmonitor）
+    ("Nikkei Asia",    gn_en("site:asia.nikkei.com when:2d")),
+    # 南华早报（中国经济视角）
+    ("SCMP China",     gn_en("site:scmp.com china economy OR markets when:2d")),
+    # 中美贸易
+    ("中美贸易",       gn("中美 贸易 OR 关税 OR 科技战 when:2d")),
+]
+
+
+# ── Source Tier（移植自 worldmonitor source-tiers.json）──────────────────────
+# 用于 importanceScore 计算
+SOURCE_TIERS: dict[str, int] = {
+    # Tier 1：官方权威
+    "证监会": 1, "央行政策": 1, "国务院": 1, "财政政策": 1,
+    "SEC": 1, "Federal Reserve": 1,
+    # Tier 2：主流财经媒体
+    "财联社": 2, "证券时报": 2, "上证报": 2, "中证报": 2,
+    "第一财经": 2, "财新": 2, "21财经": 2,
+    "CNBC Markets": 2, "Yahoo Finance": 2, "Nikkei Asia": 2, "SCMP China": 2,
+    # Tier 3：专题/聚合
+    "东方财富": 3, "同花顺": 3,
+    "A股大盘": 3, "龙头涨停": 3, "主力资金": 3, "公司公告": 3, "行业热点": 3,
+    "新能源": 3, "半导体": 3, "AI概念": 3, "医药": 3, "消费白马": 3,
+    "中美贸易": 3,
+}
+
+
+def get_source_tier(source: str) -> int:
+    return SOURCE_TIERS.get(source, 4)
+
+
+# ── A 股关键词分类器（移植自 worldmonitor _classifier.ts，适配 A 股）──────────
+CRITICAL_KEYWORDS = {
+    "熔断": "economic", "股市崩盘": "economic", "流动性危机": "economic",
+    "金融危机": "economic", "银行破产": "economic", "系统性风险": "economic",
+}
+
+HIGH_KEYWORDS = {
+    "大跌": "economic", "暴跌": "economic", "跌停": "economic",
+    "大涨": "economic", "涨停": "economic", "暴涨": "economic",
+    "降准": "economic", "降息": "economic", "加息": "economic",
+    "制裁": "economic", "贸易战": "economic", "关税": "economic",
+    "退市": "economic", "st摘帽": "economic", "强制退市": "economic",
+    "重大重组": "economic", "借壳上市": "economic",
+}
+
+MEDIUM_KEYWORDS = {
+    "业绩预增": "economic", "业绩预减": "economic", "业绩爆雷": "economic",
+    "定增": "economic", "回购": "economic", "分红": "economic",
+    "并购": "economic", "重组": "economic", "股权转让": "economic",
+    "北向资金": "economic", "主力资金": "economic",
+    "板块轮动": "economic", "热点切换": "economic",
+    "政策利好": "economic", "政策利空": "economic",
+    "涨幅居前": "economic", "资金流入": "economic",
+}
+
+LOW_KEYWORDS = {
+    "季报": "economic", "年报": "economic", "中报": "economic",
+    "股东大会": "economic", "高管变动": "economic",
+    "新产品": "tech", "研发投入": "tech",
+    "市值": "economic", "估值": "economic",
+}
+
+def classify_astock(title: str) -> tuple[str, str, float]:
+    """
+    A 股新闻关键词分类器。
+    返回 (level, category, confidence)
+    移植自 worldmonitor classifyByKeyword，适配 A 股场景。
+    """
+    lower = title.lower()
+
+    for kw, cat in CRITICAL_KEYWORDS.items():
+        if kw in lower or kw in title:
+            return ("critical", cat, 0.9)
+
+    for kw, cat in HIGH_KEYWORDS.items():
+        if kw in title:
+            return ("high", cat, 0.8)
+
+    for kw, cat in MEDIUM_KEYWORDS.items():
+        if kw in title:
+            return ("medium", cat, 0.7)
+
+    for kw, cat in LOW_KEYWORDS.items():
+        if kw in title:
+            return ("low", cat, 0.6)
+
+    return ("info", "general", 0.3)
+
+
+# ── 重要性评分（移植自 worldmonitor computeImportanceScore）──────────────────
+SEVERITY_SCORES = {"critical": 100, "high": 75, "medium": 50, "low": 25, "info": 0}
+SCORE_WEIGHTS = {"severity": 0.55, "source_tier": 0.20, "corroboration": 0.15, "recency": 0.10}
+
+def compute_importance_score(
+    level: str, source: str, published_at: datetime, corroboration: int = 1
+) -> float:
+    tier = get_source_tier(source)
+    tier_score = {1: 100, 2: 75, 3: 50, 4: 25}.get(tier, 25)
+    corr_score = min(corroboration, 5) * 20
+    age_ms = (datetime.now(tz=timezone.utc) - published_at).total_seconds() * 1000
+    recency_score = max(0.0, 1 - age_ms / (24 * 3600 * 1000)) * 100
+    return round(
+        SEVERITY_SCORES.get(level, 0) * SCORE_WEIGHTS["severity"]
+        + tier_score * SCORE_WEIGHTS["source_tier"]
+        + corr_score * SCORE_WEIGHTS["corroboration"]
+        + recency_score * SCORE_WEIGHTS["recency"]
+    )
+
+
+# ── 工具函数 ─────────────────────────────────────────────────────────────────
 
 def make_news_id(title: str, source: str) -> str:
     return hashlib.sha256(f"{title}{source}".encode()).hexdigest()[:32]
@@ -72,8 +297,9 @@ def clean_text(html: str) -> str:
 
 def looks_like_rss(text: str) -> bool:
     """
-    嗅探响应体是否为真实 RSS/Atom/RDF，过滤掉 Cloudflare 拦截页等 HTML 墙。
-    逻辑同 worldmonitor looksLikeRssXml。
+    嗅探响应体是否为真实 RSS/Atom/RDF。
+    直接移植自 worldmonitor looksLikeRssXml()。
+    防止 Cloudflare 拦截页/登录墙被当作空结果缓存。
     """
     head = text[:2048].lower()
     if re.search(r"<!doctype\s+html|<html[\s>]", head):
@@ -83,9 +309,9 @@ def looks_like_rss(text: str) -> bool:
 
 def parse_pubdate(date_str: str) -> datetime | None:
     """
-    解析 RSS pubDate / Atom published 等日期字符串，返回 aware datetime。
-    - 拒绝未来时间（宽限 1h）
-    - 解析失败返回 None（由调用方决定是否丢弃，同 worldmonitor R2 strict gate）
+    解析日期字符串，严格门控（移植自 worldmonitor R2/U2）：
+    - 无法解析 → None（调用方丢弃）
+    - 未来时间超 1h → None
     """
     if not date_str:
         return None
@@ -102,321 +328,177 @@ def parse_pubdate(date_str: str) -> datetime | None:
 
     now = datetime.now(tz=timezone.utc)
     if dt > now + FUTURE_TOLERANCE:
-        logger.debug(f"丢弃未来时间戳条目: {date_str}")
         return None
     return dt
 
 
-# ─── 基类 ─────────────────────────────────────────────────────────────────────
+# ── RSS 采集器（核心，完全对齐 worldmonitor fetchAndParseRss）────────────────
 
-class BaseCollector:
-    source_name: str = "base"
+class RSSCollector:
+    """
+    统一 RSS 采集器。
+    完全基于 worldmonitor news/v1/list-feed-digest.ts 的架构：
+    - 所有数据源统一走 RSS（Google News RSS + 直连 RSS）
+    - 严格 HTML 嗅探
+    - 严格日期门控
+    - 重要性评分
+    """
 
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
-    async def fetch(self, url: str, headers: dict | None = None, **kwargs) -> str:
-        h = {**HEADERS, **(headers or {})}
-        async with self.session.get(
-            url, headers=h, timeout=aiohttp.ClientTimeout(total=15), **kwargs
-        ) as resp:
-            resp.raise_for_status()
-            return await resp.text()
-
-    async def collect(self) -> AsyncIterator[RawNews]:
-        raise NotImplementedError
-
-
-# ─── 财联社采集器（修复版） ────────────────────────────────────────────────────
-#
-# 旧接口 https://www.cls.cn/nodeapi/telegrams 已需要登录态或返回空数据。
-# 改用电报列表接口（无需登录）：https://www.cls.cn/v1/roll/get_roll_list
-
-class CLSCollector(BaseCollector):
-    source_name = "cls"
-    API_URL = "https://www.cls.cn/v1/roll/get_roll_list"
-
-    async def collect(self) -> AsyncIterator[RawNews]:
+    async def _fetch_rss(self, url: str) -> str | None:
+        """
+        拉取 RSS，返回原始文本。
+        HTTP 非 2xx 或响应不是 RSS → 返回 None。
+        移植自 worldmonitor fetchRssText()。
+        """
         try:
-            params = {
-                "app": "CLS",
-                "os": "web",
-                "sv": "8.4.6",
-                "rn": 20,
-                "last_time": 0,
-            }
-            extra_headers = {
-                "Referer": "https://www.cls.cn/telegraph",
-                "Origin": "https://www.cls.cn",
-            }
-            html = await self.fetch(self.API_URL, headers=extra_headers, params=params)
-            import orjson
-            data = orjson.loads(html)
-            items = data.get("data", {}).get("roll_data", [])
-            for item in items[:20]:
-                title = item.get("title", "") or item.get("brief", "")
-                content = clean_text(item.get("content", title) or title)
-                if not title:
-                    continue
-                ts = item.get("ctime", 0)
-                pub = (
-                    datetime.fromtimestamp(ts, tz=timezone.utc)
-                    if ts
-                    else datetime.now(tz=timezone.utc)
-                )
-                yield RawNews(
-                    id=make_news_id(title, self.source_name),
-                    title=title,
-                    content=content,
-                    source=self.source_name,
-                    url=f"https://www.cls.cn/detail/{item.get('id', '')}",
-                    published_at=pub,
-                )
+            async with self.session.get(
+                url,
+                headers=RSS_HEADERS,
+                timeout=aiohttp.ClientTimeout(total=12),
+                ssl=False,
+            ) as resp:
+                if not resp.ok:
+                    logger.debug(f"[RSS] HTTP {resp.status}: {url[:60]}")
+                    return None
+                text = await resp.text()
+                # HTML 嗅探（worldmonitor looksLikeRssXml 逻辑）
+                if not looks_like_rss(text):
+                    logger.warning(f"[RSS] 响应非 RSS（疑似被拦截）: {url[:60]}")
+                    return None
+                return text
         except Exception as e:
-            logger.warning(f"[CLS] 采集失败: {e}")
+            logger.debug(f"[RSS] 拉取失败: {url[:60]} — {e}")
+            return None
 
+    async def parse_feed(self, name: str, url: str) -> list[RawNews]:
+        """
+        解析单个 RSS/Atom feed，返回 RawNews 列表。
+        移植自 worldmonitor parseRssXml + buildDigest 逻辑。
+        """
+        results: list[RawNews] = []
+        text = await self._fetch_rss(url)
+        if text is None:
+            return results
 
-# ─── 东方财富采集器（修复版） ─────────────────────────────────────────────────
-#
-# 旧接口 newsapi.eastmoney.com/kuaixun/v1/getlist_101_ajaxResult_50_1_.html
-# 已返回 403 或空数据。
-# 改用：https://np-listapi.eastmoney.com/comm/wap/getListInfo
+        feed = feedparser.parse(text)
+        now = datetime.now(tz=timezone.utc)
+        cutoff = now - MAX_NEWS_AGE
 
-class EastMoneyCollector(BaseCollector):
-    source_name = "eastmoney"
-    API_URL = "https://np-listapi.eastmoney.com/comm/wap/getListInfo"
+        parsed_count = 0
+        dropped_undated = 0
 
-    async def collect(self) -> AsyncIterator[RawNews]:
-        try:
-            params = {
-                "client": "wap",
-                "type": 1,
-                "mTypeAndId": "1,317",
-                "pageSize": 20,
-                "pageIndex": 1,
-                "callback": "",
-                "_": int(datetime.now().timestamp() * 1000),
-            }
-            extra_headers = {
-                "Referer": "https://wap.eastmoney.com/",
-            }
-            html = await self.fetch(self.API_URL, headers=extra_headers, params=params)
-            html = html.strip()
-            if html.startswith("(") and html.endswith(")"):
-                html = html[1:-1]
-            import orjson
-            data = orjson.loads(html)
-            items = (
-                data.get("data", {}).get("list", [])
-                or data.get("data", {}).get("LiveList", [])
-                or []
-            )
-            for item in items[:20]:
-                title = item.get("title", "")
-                content = item.get("content", "") or item.get("digest", title)
-                if not title:
-                    continue
-                pub_str = item.get("datetime", "") or item.get("showtime", "")
-                pub = None
-                if pub_str:
-                    try:
-                        pub = datetime.strptime(pub_str, "%Y-%m-%d %H:%M:%S").replace(
-                            tzinfo=timezone.utc
-                        )
-                    except Exception:
-                        pass
-                pub = pub or datetime.now(tz=timezone.utc)
-                yield RawNews(
-                    id=make_news_id(title, self.source_name),
-                    title=title,
-                    content=clean_text(str(content)),
-                    source=self.source_name,
-                    url=item.get("url", item.get("art_url", "")),
-                    published_at=pub,
-                )
-        except Exception as e:
-            logger.warning(f"[EastMoney] 采集失败: {e}")
+        for entry in feed.entries[:ITEMS_PER_FEED]:
+            title = (entry.get("title") or "").strip()
+            if not title:
+                continue
+            parsed_count += 1
 
+            # ── 严格日期门控（worldmonitor R2/U2）────────────────────────────
+            # 优先用 feedparser 解析的 published_parsed
+            pub: datetime | None = None
+            pub_parsed = entry.get("published_parsed")
+            if pub_parsed:
+                try:
+                    pub = datetime(*pub_parsed[:6], tzinfo=timezone.utc)
+                    if pub > now + FUTURE_TOLERANCE:
+                        dropped_undated += 1
+                        continue
+                except Exception:
+                    pub = None
 
-# ─── 新浪财经采集器（修复版） ─────────────────────────────────────────────────
-#
-# 旧实现依赖 CSS selector .list_009 li a，新浪财经页面结构已改变。
-# 改用新浪财经直播快讯 JSON 接口，稳定且无需解析 HTML。
+            # feedparser 失败时用原始字符串
+            if pub is None:
+                raw_date = entry.get("published", "") or entry.get("updated", "")
+                pub = parse_pubdate(raw_date)
 
-class SinaCollector(BaseCollector):
-    source_name = "sina"
-    API_URL = "https://zhibo.sina.com.cn/api/zhibo/feed"
+            # 无法解析日期 → 丢弃（worldmonitor: never stamp with Date.now()）
+            if pub is None:
+                dropped_undated += 1
+                logger.debug(f"[RSS:{name}] 丢弃无日期条目: {title[:40]}")
+                continue
 
-    async def collect(self) -> AsyncIterator[RawNews]:
-        try:
-            params = {
-                "page": 1,
-                "page_size": 20,
-                "zhibo_id": 152,
-                "tag_id": 0,
-                "dire": "f",
-                "dpc": 1,
-            }
-            extra_headers = {
-                "Referer": "https://finance.sina.com.cn/",
-            }
-            html = await self.fetch(self.API_URL, headers=extra_headers, params=params)
-            import orjson
-            data = orjson.loads(html)
-            items = data.get("result", {}).get("data", {}).get("feed", {}).get("list", [])
-            for item in items[:20]:
-                rich_text = item.get("rich_text", "") or item.get("text", "")
-                content = clean_text(rich_text)
-                title = content[:80] if content else ""
-                if not title:
-                    continue
-                create_time = item.get("create_time", "")
-                pub = parse_pubdate(create_time) or datetime.now(tz=timezone.utc)
-                yield RawNews(
-                    id=make_news_id(title, self.source_name),
-                    title=title,
-                    content=content,
-                    source=self.source_name,
-                    url="https://finance.sina.com.cn/",
-                    published_at=pub,
-                )
-        except Exception as e:
-            logger.warning(f"[Sina] 采集失败: {e}")
+            # ── 新鲜度过滤（worldmonitor U3 freshness floor）─────────────────
+            if pub < cutoff:
+                logger.debug(f"[RSS:{name}] 丢弃过期条目({pub.date()}): {title[:40]}")
+                continue
 
+            # ── 内容提取 ──────────────────────────────────────────────────────
+            summary = entry.get("summary", "") or ""
+            content = clean_text(summary) if summary else title
 
-# ─── RSS 聚合采集器（修复版） ─────────────────────────────────────────────────
-#
-# 修复说明：
-# - 移除已失效的路透中文、彭博中文 RSS
-# - 新增 A 股/行业专项 Google News RSS（同 worldmonitor gn() 模式）
-# - 新增稳定可用的国内财经 RSS
+            link = entry.get("link", url)
 
-def _gn(query: str) -> str:
-    """构建 Google News RSS URL（同 worldmonitor gn() 辅助函数）"""
-    return (
-        f"https://news.google.com/rss/search"
-        f"?q={urllib.parse.quote(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
-    )
+            # ── 关键词分类（worldmonitor classifyByKeyword 移植）─────────────
+            level, category, confidence = classify_astock(title)
 
+            # ── 重要性评分（worldmonitor computeImportanceScore 移植）──────────
+            score = compute_importance_score(level, name, pub)
 
-RSS_FEEDS: list[tuple[str, str]] = [
-    # ── 国内财经（稳定 RSS）──────────────────────────────────────────────────
-    ("证券时报",   "https://www.stcn.com/feed"),
-    ("中国证券网", "https://news.cnstock.com/news/sns_yw/rss.xml"),
-    # ── Google News A股专项（参考 worldmonitor gn() 模式）──────────────────
-    ("A股要闻",    _gn("A股 OR 上证指数 OR 沪深 when:1d")),
-    ("龙头股",     _gn("涨停板 OR 龙头股 OR 主力资金 when:1d")),
-    ("上市公司公告", _gn("上市公司 公告 OR 业绩 OR 定增 when:1d")),
-    ("宏观政策",   _gn("央行 OR 证监会 OR 财政部 政策 when:1d")),
-    ("北向资金",   _gn("北向资金 OR 陆股通 OR 外资 A股 when:1d")),
-    # ── 可靠的英文财经 RSS──────────────────────────────────────────────────
-    ("CNBC Markets", "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
-    ("Yahoo Finance", "https://finance.yahoo.com/rss/topstories"),
-    ("财新",       _gn("site:caixin.com when:1d")),
-    ("第一财经",   _gn("site:yicai.com when:1d")),
-]
+            results.append(RawNews(
+                id=make_news_id(title, name),
+                title=title,
+                content=content,
+                source=name,
+                url=link,
+                published_at=pub,
+            ))
 
+        if dropped_undated > 0:
+            logger.debug(f"[RSS:{name}] 丢弃无日期条目 {dropped_undated}/{parsed_count}")
 
-class RSSCollector(BaseCollector):
-    source_name = "rss"
-
-    async def _parse_feed(self, name: str, url: str) -> list[RawNews]:
-        results = []
-        try:
-            html = await self.fetch(url, headers=RSS_HEADERS)
-
-            # ── HTML 嗅探（同 worldmonitor looksLikeRssXml）──────────────────
-            if not looks_like_rss(html):
-                logger.warning(f"[RSS:{name}] 响应不是有效 RSS/Atom，跳过（可能被防火墙拦截）")
-                return results
-
-            feed = feedparser.parse(html)
-            for entry in feed.entries[:10]:
-                title = entry.get("title", "").strip()
-                content = clean_text(entry.get("summary", title) or title)
-                if not title:
-                    continue
-
-                # ── 严格日期校验（同 worldmonitor R2 strict date gate）────────
-                pub_parsed = entry.get("published_parsed")
-                pub_str = entry.get("published", "") or entry.get("updated", "")
-                pub: datetime | None = None
-
-                if pub_parsed:
-                    try:
-                        pub = datetime(*pub_parsed[:6], tzinfo=timezone.utc)
-                        now = datetime.now(tz=timezone.utc)
-                        if pub > now + FUTURE_TOLERANCE:
-                            logger.debug(f"[RSS:{name}] 丢弃未来时间戳: {title[:40]}")
-                            continue
-                    except Exception:
-                        pub = None
-
-                if pub is None:
-                    pub = parse_pubdate(pub_str)
-
-                # 严格模式：无法解析日期则丢弃（避免静态机构页混入）
-                if pub is None:
-                    logger.debug(f"[RSS:{name}] 丢弃无时间戳条目: {title[:40]}")
-                    continue
-
-                results.append(
-                    RawNews(
-                        id=make_news_id(title, name),
-                        title=title,
-                        content=content,
-                        source=name,
-                        url=entry.get("link", url),
-                        published_at=pub,
-                    )
-                )
-        except aiohttp.ClientResponseError as e:
-            logger.warning(f"[RSS:{name}] HTTP {e.status}: {url}")
-        except Exception as e:
-            logger.warning(f"[RSS:{name}] 采集失败: {e}")
         return results
 
-    async def collect(self) -> AsyncIterator[RawNews]:
-        tasks = [self._parse_feed(name, url) for name, url in RSS_FEEDS]
-        results = await asyncio.gather(*tasks)
-        for batch in results:
-            for news in batch:
-                yield news
+    async def collect_all(self) -> list[RawNews]:
+        """
+        并发采集所有 feed（移植自 worldmonitor buildDigest BATCH_CONCURRENCY 模式）。
+        """
+        BATCH_SIZE = 10  # 同 worldmonitor BATCH_CONCURRENCY=20，保守一些
+        all_results: list[RawNews] = []
+
+        for i in range(0, len(ASTOCK_FEEDS), BATCH_SIZE):
+            batch = ASTOCK_FEEDS[i:i + BATCH_SIZE]
+            tasks = [self.parse_feed(name, url) for name, url in batch]
+            settled = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in settled:
+                if isinstance(result, list):
+                    all_results.extend(result)
+                elif isinstance(result, Exception):
+                    logger.warning(f"[RSS] batch 异常: {result}")
+
+        return all_results
 
 
-# ─── 统一采集入口 ─────────────────────────────────────────────────────────────
+# ── 统一采集入口 ─────────────────────────────────────────────────────────────
 
 class NewsCollector:
-    """统一采集入口，管理所有采集器"""
+    """
+    统一采集入口。
+    架构与 worldmonitor listFeedDigest 对齐：
+    - 单一 RSSCollector 管理所有源
+    - Google News RSS 作为主要数据通道，完全绕过各站点 WAF
+    - 全局去重（sha256 title hash）
+    """
 
     def __init__(self):
         self._seen: set[str] = set()
 
     async def collect_all(self) -> list[RawNews]:
-        """并发采集所有源，去重后返回"""
-        connector = aiohttp.TCPConnector(limit=20, ssl=False)
+        connector = aiohttp.TCPConnector(limit=30, ssl=False)
         async with aiohttp.ClientSession(connector=connector) as session:
-            collectors: list[BaseCollector] = []
-            if settings.enable_cls:
-                collectors.append(CLSCollector(session))
-            if settings.enable_eastmoney:
-                collectors.append(EastMoneyCollector(session))
-            if settings.enable_sina:
-                collectors.append(SinaCollector(session))
-            if settings.enable_rss:
-                collectors.append(RSSCollector(session))
+            collector = RSSCollector(session)
+            raw = await collector.collect_all()
 
-            results: list[RawNews] = []
-            for collector in collectors:
-                try:
-                    async for news in collector.collect():
-                        if news.id not in self._seen:
-                            self._seen.add(news.id)
-                            results.append(news)
-                            logger.debug(f"采集: [{news.source}] {news.title[:40]}")
-                except Exception as e:
-                    logger.error(f"[{collector.source_name}] 采集器异常: {e}")
+        # 去重 + 按时间倒序
+        results: list[RawNews] = []
+        for news in sorted(raw, key=lambda n: n.published_at, reverse=True):
+            if news.id not in self._seen:
+                self._seen.add(news.id)
+                results.append(news)
+                logger.debug(f"采集: [{news.source}] {news.title[:50]}")
 
-        logger.info(f"本次采集完成，共 {len(results)} 条新闻")
+        logger.info(f"本次采集完成，共 {len(results)} 条新闻（{len(ASTOCK_FEEDS)} 个 feed）")
         return results
